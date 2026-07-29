@@ -16,6 +16,29 @@ import Darwin
 // must not interleave with each other.
 @Suite(.serialized)
 struct CmuxTopSnapshotScopeCacheTests {
+    @Test func execMonitorTargetsArgumentScopedExecutable() {
+        #expect(
+            CmuxTopProcessSnapshot.requiresCMUXScopeExecMonitoring(
+                CmuxTopProcessScopeCacheKey(
+                    pid: 100,
+                    startSeconds: 200,
+                    startMicroseconds: 300,
+                    executableName: "cmux"
+                )
+            )
+        )
+        #expect(
+            !CmuxTopProcessSnapshot.requiresCMUXScopeExecMonitoring(
+                CmuxTopProcessScopeCacheKey(
+                    pid: 101,
+                    startSeconds: 201,
+                    startMicroseconds: 301,
+                    executableName: "zsh"
+                )
+            )
+        )
+    }
+
     @Test func discoveryKeepsScopedProcessesAndTheirUnscopedDescendants() {
         let included = CmuxTopProcessSnapshot.discoveryIncludedPIDs(
             parentPIDByPID: [

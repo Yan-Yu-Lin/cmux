@@ -18,10 +18,10 @@ private struct CmuxTopMonitoredProcessIdentity: Equatable {
     }
 }
 
-// One kqueue watches every readable same-user process for exec and exit events.
-// Kernel process filters survive exec. The retained identity distinguishes PID
-// reuse and lets the monitor ignore changed-name execs, which already invalidate
-// the scope cache through its executable-name key.
+// One kqueue watches same-user executable candidates that can acquire scope
+// from argv. Kernel process filters survive exec. The retained identity
+// distinguishes PID reuse and ignores changed-name execs, which already
+// invalidate the scope cache through its executable-name key.
 private struct CmuxTopProcessExecMonitorState {
     let queueDescriptor: Int32
     var registeredIdentitiesByPID: [Int: CmuxTopMonitoredProcessIdentity] = [:]
@@ -72,7 +72,11 @@ private struct CmuxTopProcessExecMonitorState {
             where process.pbi_uid == currentUID {
             let pid = Int(process.pbi_pid)
             guard pid > 0 else { continue }
-            let identity = CmuxTopMonitoredProcessIdentity(scopeKeys[index])
+            let cacheKey = scopeKeys[index]
+            guard CmuxTopProcessSnapshot.requiresCMUXScopeExecMonitoring(cacheKey) else {
+                continue
+            }
+            let identity = CmuxTopMonitoredProcessIdentity(cacheKey)
             reconcile(
                 pid: pid,
                 identity: identity,
@@ -98,7 +102,8 @@ private struct CmuxTopProcessExecMonitorState {
         for process in sampledProcesses where process.pbi_uid == currentUID {
             let pid = Int(process.pbi_pid)
             guard pid > 0,
-                  let cacheKey = activeKeysByPID[pid] else {
+                  let cacheKey = activeKeysByPID[pid],
+                  CmuxTopProcessSnapshot.requiresCMUXScopeExecMonitoring(cacheKey) else {
                 continue
             }
             let identity = CmuxTopMonitoredProcessIdentity(cacheKey)
@@ -228,6 +233,15 @@ private nonisolated let cmuxTopProcessExecMonitor = OSAllocatedUnfairLock(
 )
 
 extension CmuxTopProcessSnapshot {
+    /// Only the `cmux hooks codex monitor` argv path can acquire scope without
+    /// inheriting CMUX_* environment. Its executable basename is exactly cmux.
+    /// Environment-scoped children inherit their scope before exec.
+    static func requiresCMUXScopeExecMonitoring(
+        _ cacheKey: CmuxTopProcessScopeCacheKey
+    ) -> Bool {
+        cacheKey.executableName == "cmux"
+    }
+
     static func synchronizeCMUXScopeExecMonitor(
         for sampledProcesses: [proc_bsdinfo],
         scopeKeys: [CmuxTopProcessScopeCacheKey]
