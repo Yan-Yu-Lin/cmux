@@ -180,6 +180,136 @@ struct DynamicNotchAppearanceTests {
             ) == nil
         )
     }
+
+    @Test("Per-display sizes validate, serialize, and remove independently")
+    func perDisplaySizes() throws {
+        let first = "uuid:first"
+        let second = "uuid:second"
+        let firstSize = try #require(
+            DynamicNotchDisplaySize(width: 680, height: 620)
+        )
+        let secondSize = try #require(
+            DynamicNotchDisplaySize(width: 920, height: 760)
+        )
+        var sizes: [String: String] = [:]
+
+        sizes = DynamicNotchDisplaySizeSettings.setting(
+            firstSize,
+            for: first,
+            in: sizes
+        )
+        sizes = DynamicNotchDisplaySizeSettings.setting(
+            secondSize,
+            for: second,
+            in: sizes
+        )
+
+        #expect(
+            DynamicNotchDisplaySizeSettings.size(
+                for: first,
+                in: sizes
+            ) == firstSize
+        )
+        #expect(
+            DynamicNotchDisplaySizeSettings.size(
+                for: second,
+                in: sizes
+            ) == secondSize
+        )
+        #expect(
+            DynamicNotchDisplaySizeSettings.removing(
+                displayKey: first,
+                from: sizes
+            ) == [second: "920.0,760.0"]
+        )
+    }
+
+    @Test("Per-display size JSON rejects booleans and incomplete objects")
+    func perDisplaySizeJSONValidation() {
+        #expect(
+            DynamicNotchDisplaySizeSettings.serializedSizes(
+                fromJSONObject: [
+                    "uuid:first": [
+                        "width": 680,
+                        "height": 620,
+                    ],
+                ]
+            ) == ["uuid:first": "680.0,620.0"]
+        )
+        #expect(
+            DynamicNotchDisplaySizeSettings.serializedSizes(
+                fromJSONObject: [
+                    "uuid:first": [
+                        "width": true,
+                        "height": 620,
+                    ],
+                ]
+            ) == nil
+        )
+        #expect(
+            DynamicNotchDisplaySizeSettings.serializedSizes(
+                fromJSONObject: [
+                    "uuid:first": ["width": 680],
+                ]
+            ) == nil
+        )
+    }
+
+    @Test("Swipe actions round-trip through defaults and nested JSON")
+    func swipeActionsRoundTrip() throws {
+        let customized = DynamicNotchSwipeActions()
+            .setting(.hide, for: .notification, direction: .right)
+            .setting(.dismiss, for: .feed, direction: .left)
+
+        let defaultsDecoded = DynamicNotchSwipeActions
+            .decodeFromUserDefaults(customized.encodeForUserDefaults())
+        let jsonDecoded = DynamicNotchSwipeActions.decodeFromJSON(
+            customized.encodeForJSON()
+        )
+
+        #expect(defaultsDecoded == customized)
+        #expect(jsonDecoded == customized)
+        #expect(
+            jsonDecoded?.action(
+                for: .notification,
+                direction: .right
+            ) == .hide
+        )
+        #expect(
+            jsonDecoded?.resetting(rowKind: .notification).action(
+                for: .notification,
+                direction: .right
+            ) == .open
+        )
+    }
+
+    @Test("Swipe JSON requires every row and direction")
+    func swipeActionJSONValidation() {
+        #expect(
+            DynamicNotchSwipeActions.decodeFromJSON([
+                "notification": [
+                    "left": "dismiss",
+                    "right": "open",
+                ],
+            ]) == nil
+        )
+        #expect(
+            DynamicNotchSwipeActions.decodeFromJSON([
+                "notification": [
+                    "left": "launch",
+                    "right": "open",
+                ],
+                "feed": [
+                    "left": "hide",
+                    "right": "open",
+                ],
+                "unread": [
+                    "left": "markRead",
+                    "right": "open",
+                ],
+            ]) == nil
+        )
+    }
 }
 
 @Suite("Dynamic Notch delivery")

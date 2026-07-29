@@ -185,13 +185,25 @@ extension ControlNotificationContext {
         enabled: Bool?,
         horizontalPosition: Double?,
         displayKey: String?,
-        resetDisplayPosition: Bool
+        resetDisplayPosition: Bool,
+        expandedWidth: Double?,
+        expandedHeight: Double?,
+        resetDisplaySize: Bool,
+        swipeRowKind: String?,
+        swipeDirection: String?,
+        swipeAction: String?,
+        resetSwipeActions: Bool
     ) -> ControlDynamicNotchSettingsSnapshot {
         ControlDynamicNotchSettingsSnapshot(
             enabled: enabled ?? false,
             horizontalPosition: horizontalPosition ?? 0.5
         )
     }
+    func controlDynamicNotchPresent(
+        phase: String,
+        section: String?,
+        displayKey: String?
+    ) -> Bool { false }
 
     var notificationStrings: ControlNotificationStrings {
         ControlNotificationStrings(
@@ -215,7 +227,13 @@ extension ControlNotificationContext {
             dynamicNotchDisplayConfigurationInvalid:
                 "display_key requires horizontal_position or reset_display_position",
             dynamicNotchConfigurationRequired:
-                "enabled, horizontal_position, or reset_display_position is required"
+                "enabled, horizontal_position, or reset_display_position is required",
+            dynamicNotchExpandedSizeInvalid:
+                "Dynamic Notch size is invalid",
+            dynamicNotchSwipeConfigurationInvalid:
+                "Dynamic Notch swipe configuration is invalid",
+            dynamicNotchPresentationInvalid:
+                "Dynamic Notch presentation is invalid"
         )
     }
 }

@@ -29,11 +29,24 @@ extension TerminalController: ControlNotificationContext {
         let serializedPositions = settings.value(
             for: catalog.dynamicNotchDisplayPositions
         )
+        let serializedSizes = settings.value(
+            for: catalog.dynamicNotchDisplaySizes
+        )
+        let expandedWidth = Double(
+            appearance.dimension(.expandedWidth)
+        )
+        let expandedHeight = Double(
+            appearance.dimension(.maximumExpandedHeight)
+        )
         let displays = NSScreen.screens.map { screen in
             let displayKey = screen.cmuxDynamicNotchDisplayKey
             let override = DynamicNotchDisplayPositionSettings.position(
                 for: displayKey,
                 in: serializedPositions
+            )
+            let sizeOverride = DynamicNotchDisplaySizeSettings.size(
+                for: displayKey,
+                in: serializedSizes
             )
             let geometry = DynamicNotchScreenGeometry(
                 screen: screen,
@@ -44,20 +57,69 @@ extension TerminalController: ControlNotificationContext {
                     override ?? position
                 )
             )
+            let maximumWidth = min(
+                DynamicNotchDisplaySize.widthRange.upperBound,
+                max(
+                    DynamicNotchDisplaySize.widthRange.lowerBound,
+                    Double(screen.frame.width - 40)
+                )
+            )
+            let maximumHeight = min(
+                DynamicNotchDisplaySize.heightRange.upperBound,
+                max(
+                    DynamicNotchDisplaySize.heightRange.lowerBound,
+                    Double(
+                        screen.frame.height
+                            - max(
+                                screen.safeAreaInsets.top,
+                                NSStatusBar.system.thickness
+                            )
+                            - 40
+                    )
+                )
+            )
             return ControlDynamicNotchDisplaySnapshot(
                 key: displayKey,
                 id: screen.cmuxDisplayID,
                 name: screen.localizedName,
                 hasHardwareNotch: geometry.hasHardwareNotch,
                 horizontalPosition: override ?? position,
-                hasPositionOverride: override != nil
+                hasPositionOverride: override != nil,
+                expandedWidth: min(
+                    sizeOverride?.width ?? expandedWidth,
+                    maximumWidth
+                ),
+                expandedHeight: min(
+                    sizeOverride?.height ?? expandedHeight,
+                    maximumHeight
+                ),
+                hasSizeOverride: sizeOverride != nil
             )
         }
+        let swipeActions = settings.value(
+            for: catalog.dynamicNotchSwipeActions
+        )
         return ControlDynamicNotchSettingsSnapshot(
             enabled: DynamicNotchDeliverySettings.isEnabled(
                 mode: settings.value(for: catalog.delivery)
             ),
             horizontalPosition: position,
+            expandedWidth: expandedWidth,
+            expandedHeight: expandedHeight,
+            swipeActions: DynamicNotchSwipeRowKind.allCases.map {
+                rowKind in
+                ControlDynamicNotchSwipeSnapshot(
+                    rowKind: rowKind.rawValue,
+                    left: swipeActions.action(
+                        for: rowKind,
+                        direction: .left
+                    ).rawValue,
+                    right: swipeActions.action(
+                        for: rowKind,
+                        direction: .right
+                    ).rawValue
+                )
+            },
             displays: displays
         )
     }
@@ -66,7 +128,14 @@ extension TerminalController: ControlNotificationContext {
         enabled: Bool?,
         horizontalPosition: Double?,
         displayKey: String?,
-        resetDisplayPosition: Bool
+        resetDisplayPosition: Bool,
+        expandedWidth: Double?,
+        expandedHeight: Double?,
+        resetDisplaySize: Bool,
+        swipeRowKind: String?,
+        swipeDirection: String?,
+        swipeAction: String?,
+        resetSwipeActions: Bool
     ) -> ControlDynamicNotchSettingsSnapshot {
         if let enabled {
             DynamicNotchDeliverySettings.setEnabled(enabled)
@@ -106,7 +175,92 @@ extension TerminalController: ControlNotificationContext {
                 for: catalog.dynamicNotchDisplayPositions
             )
         }
+        if resetDisplaySize, let displayKey {
+            let key = catalog.dynamicNotchDisplaySizes
+            settings.set(
+                DynamicNotchDisplaySizeSettings.removing(
+                    displayKey: displayKey,
+                    from: settings.value(for: key)
+                ),
+                for: key
+            )
+        } else if let expandedWidth,
+            let expandedHeight,
+            let displayKey,
+            let size = DynamicNotchDisplaySize(
+                width: expandedWidth,
+                height: expandedHeight
+            ) {
+            let key = catalog.dynamicNotchDisplaySizes
+            settings.set(
+                DynamicNotchDisplaySizeSettings.setting(
+                    size,
+                    for: displayKey,
+                    in: settings.value(for: key)
+                ),
+                for: key
+            )
+        } else if expandedWidth != nil || expandedHeight != nil {
+            let key = catalog.dynamicNotch
+            var appearance = settings.value(for: key)
+            if let expandedWidth {
+                appearance = appearance.replacing(
+                    .number(expandedWidth),
+                    for: .expandedWidth
+                )
+            }
+            if let expandedHeight {
+                appearance = appearance.replacing(
+                    .number(expandedHeight),
+                    for: .maximumExpandedHeight
+                )
+            }
+            settings.set(appearance, for: key)
+            settings.set([:], for: catalog.dynamicNotchDisplaySizes)
+        }
+        if resetSwipeActions {
+            let key = catalog.dynamicNotchSwipeActions
+            let current = settings.value(for: key)
+            let rowKind = swipeRowKind.flatMap(
+                DynamicNotchSwipeRowKind.init(rawValue:)
+            )
+            settings.set(
+                current.resetting(rowKind: rowKind),
+                for: key
+            )
+        } else if let rowKind = swipeRowKind.flatMap(
+            DynamicNotchSwipeRowKind.init(rawValue:)
+        ),
+            let direction = swipeDirection.flatMap(
+                DynamicNotchSwipeDirection.init(rawValue:)
+            ),
+            let action = swipeAction.flatMap(
+                DynamicNotchSwipeAction.init(rawValue:)
+            ) {
+            let key = catalog.dynamicNotchSwipeActions
+            settings.set(
+                settings.value(for: key).setting(
+                    action,
+                    for: rowKind,
+                    direction: direction
+                ),
+                for: key
+            )
+        }
         return controlDynamicNotchSettings()
+    }
+
+    func controlDynamicNotchPresent(
+        phase: String,
+        section: String?,
+        displayKey: String?
+    ) -> Bool {
+        AppDelegate.shared?.dynamicNotchNotificationPresenter
+            .setPresentation(
+                phase: phase,
+                section: section,
+                displayKey: displayKey
+            ) ?? false
     }
 
     func controlNotificationCreate(
@@ -317,6 +471,18 @@ extension TerminalController: ControlNotificationContext {
                     kind: $0.kind == .secure ? .secure : .text
                 )
             },
+            swipeLeftAction: presentation.swipeLeftAction.map {
+                TerminalNotificationPresentation.SwipeAction(
+                    id: $0.id,
+                    title: $0.title
+                )
+            },
+            swipeRightAction: presentation.swipeRightAction.map {
+                TerminalNotificationPresentation.SwipeAction(
+                    id: $0.id,
+                    title: $0.title
+                )
+            },
             appearance: presentation.appearance,
             responseToken: presentation.responseToken,
             timeout: presentation.timeout
@@ -477,6 +643,24 @@ extension TerminalController: ControlNotificationContext {
                     "socket.notification.dynamicNotch.configurationRequired",
                 defaultValue:
                     "enabled, horizontal_position, or reset_display_position is required"
+            ),
+            dynamicNotchExpandedSizeInvalid: String(
+                localized:
+                    "socket.notification.dynamicNotch.expandedSizeInvalid",
+                defaultValue:
+                    "expanded_width must be 300...1200 and expanded_height must be 160...1400"
+            ),
+            dynamicNotchSwipeConfigurationInvalid: String(
+                localized:
+                    "socket.notification.dynamicNotch.swipeConfigurationInvalid",
+                defaultValue:
+                    "swipe row, direction, and action must form a valid configuration"
+            ),
+            dynamicNotchPresentationInvalid: String(
+                localized:
+                    "socket.notification.dynamicNotch.presentationInvalid",
+                defaultValue:
+                    "phase must be auto, retracted, compact, or expanded; section must be feed or unread"
             )
         )
     }
