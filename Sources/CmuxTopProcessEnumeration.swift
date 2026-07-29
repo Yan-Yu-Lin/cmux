@@ -12,7 +12,6 @@ extension CmuxTopProcessSnapshot {
             from: bsdInfo,
             includeProcessDetails: false,
             includeCMUXScope: false,
-            negativeScopeTTLNanoseconds: cmuxTopNegativeScopeTTLNanoseconds,
             sampledAtNanoseconds: cpuSampleClockNanoseconds(),
             currentCPUSamples: &cpuSamples
         )?.info
@@ -32,9 +31,12 @@ extension CmuxTopProcessSnapshot {
             )
         }
 
-        let sampledAtNanoseconds = cpuSampleClockNanoseconds()
-        let scopeNegativeTTLNanoseconds = negativeScopeTTLNanoseconds(
-            processCount: sampledProcesses.count
+        let scopeKeys = sampledProcesses.map { scopeCacheKey(from: $0) }
+        invalidateCMUXScopeCache(
+            forPIDs: synchronizeCMUXScopeExecMonitor(
+                for: sampledProcesses,
+                scopeKeys: scopeKeys
+            )
         )
         var activeScopeKeys: Set<CmuxTopProcessScopeCacheKey> = []
         activeScopeKeys.reserveCapacity(sampledProcesses.count)
@@ -42,17 +44,15 @@ extension CmuxTopProcessSnapshot {
         var parentPIDByPID: [Int: Int] = [:]
         parentPIDByPID.reserveCapacity(sampledProcesses.count)
 
-        for process in sampledProcesses {
+        for (index, process) in sampledProcesses.enumerated() {
             let pid = Int(process.pbi_pid)
             guard pid > 0 else { continue }
-            let cacheKey = scopeCacheKey(from: process)
+            let cacheKey = scopeKeys[index]
             activeScopeKeys.insert(cacheKey)
             parentPIDByPID[pid] = Int(process.pbi_ppid)
             if let scope = cachedCMUXScope(
                 for: pid,
-                cacheKey: cacheKey,
-                nowNanoseconds: sampledAtNanoseconds,
-                negativeTTLNanoseconds: scopeNegativeTTLNanoseconds
+                cacheKey: cacheKey
             ) {
                 scopeByPID[pid] = scope
             }
@@ -94,10 +94,18 @@ extension CmuxTopProcessSnapshot {
         }
 
         let includesCMUXScope = !cmuxSurfaceIDs.isEmpty
-        let sampledAtNanoseconds = cpuSampleClockNanoseconds()
-        let scopeNegativeTTLNanoseconds = negativeScopeTTLNanoseconds(
-            processCount: sampledProcesses.count
-        )
+        let scopeKeys: [CmuxTopProcessScopeCacheKey]
+        if includesCMUXScope {
+            scopeKeys = sampledProcesses.map { scopeCacheKey(from: $0) }
+            invalidateCMUXScopeCache(
+                forPIDs: synchronizeCMUXScopeExecMonitor(
+                    for: sampledProcesses,
+                    scopeKeys: scopeKeys
+                )
+            )
+        } else {
+            scopeKeys = []
+        }
         var activeScopeKeys: Set<CmuxTopProcessScopeCacheKey> = []
         var scopeByPID: [Int: CmuxTopProcessScope] = [:]
         var parentPIDByPID: [Int: Int] = [:]
@@ -107,7 +115,7 @@ extension CmuxTopProcessSnapshot {
         if includesCMUXScope {
             activeScopeKeys.reserveCapacity(sampledProcesses.count)
         }
-        for process in sampledProcesses {
+        for (index, process) in sampledProcesses.enumerated() {
             let pid = Int(process.pbi_pid)
             guard pid > 0 else { continue }
             parentPIDByPID[pid] = Int(process.pbi_ppid)
@@ -115,13 +123,11 @@ extension CmuxTopProcessSnapshot {
                 rootPIDs.insert(pid)
             }
             guard includesCMUXScope else { continue }
-            let cacheKey = scopeCacheKey(from: process)
+            let cacheKey = scopeKeys[index]
             activeScopeKeys.insert(cacheKey)
             if let scope = cachedCMUXScope(
                 for: pid,
-                cacheKey: cacheKey,
-                nowNanoseconds: sampledAtNanoseconds,
-                negativeTTLNanoseconds: scopeNegativeTTLNanoseconds
+                cacheKey: cacheKey
             ) {
                 scopeByPID[pid] = scope
                 if let surfaceID = scope.surfaceID,
@@ -182,6 +188,13 @@ extension CmuxTopProcessSnapshot {
         for process in sampledProcesses {
             scopeKeyByPID[Int(process.pbi_pid)] = scopeCacheKey(from: process)
         }
+        if includeCMUXScope {
+            let invalidatedPIDs = synchronizeCMUXScopeExecMonitor(
+                activeKeysByPID: scopeKeyByPID,
+                sampledProcesses: sampledProcesses
+            )
+            invalidateCMUXScopeCache(forPIDs: invalidatedPIDs)
+        }
         let activeScopeKeys = Set(scopeKeyByPID.values)
         var parentScopeKeys: [CmuxTopProcessScopeCacheKey: CmuxTopProcessScopeCacheKey] = [:]
         parentScopeKeys.reserveCapacity(sampledProcesses.count)
@@ -192,9 +205,6 @@ extension CmuxTopProcessSnapshot {
             parentScopeKeys[key] = parentKey
         }
         let sampledAtNanoseconds = cpuSampleClockNanoseconds()
-        let scopeNegativeTTLNanoseconds = negativeScopeTTLNanoseconds(
-            processCount: sampledProcesses.count
-        )
         var currentCPUSamples: [CmuxTopProcessScopeCacheKey: CmuxTopProcessCPUSample] = [:]
         var processRecords: [(info: CmuxTopProcessInfo, cpuSampleKey: CmuxTopProcessScopeCacheKey?)] = []
         processRecords.reserveCapacity(sampledProcesses.count)
@@ -203,7 +213,6 @@ extension CmuxTopProcessSnapshot {
                 from: process,
                 includeProcessDetails: includeProcessDetails,
                 includeCMUXScope: includeCMUXScope,
-                negativeScopeTTLNanoseconds: scopeNegativeTTLNanoseconds,
                 sampledAtNanoseconds: sampledAtNanoseconds,
                 currentCPUSamples: &currentCPUSamples
             ) else {
@@ -344,7 +353,6 @@ extension CmuxTopProcessSnapshot {
         from bsdInfo: proc_bsdinfo,
         includeProcessDetails: Bool,
         includeCMUXScope: Bool,
-        negativeScopeTTLNanoseconds: UInt64,
         sampledAtNanoseconds: UInt64,
         currentCPUSamples: inout [CmuxTopProcessScopeCacheKey: CmuxTopProcessCPUSample]
     ) -> (info: CmuxTopProcessInfo, cpuSampleKey: CmuxTopProcessScopeCacheKey?)? {
@@ -360,12 +368,7 @@ extension CmuxTopProcessSnapshot {
         let rawTTY = Int64(bsdInfo.e_tdev)
         let ttyDevice = rawTTY > 0 ? rawTTY : nil
         let cmuxScope = includeCMUXScope
-            ? cachedCMUXScope(
-                for: pid,
-                cacheKey: cacheKey,
-                nowNanoseconds: sampledAtNanoseconds,
-                negativeTTLNanoseconds: negativeScopeTTLNanoseconds
-            )
+            ? cachedCMUXScope(for: pid, cacheKey: cacheKey)
             : nil
         let rawProcessGroupID = Int(bsdInfo.pbi_pgid)
         let processGroupID = rawProcessGroupID > 0 ? rawProcessGroupID : nil
