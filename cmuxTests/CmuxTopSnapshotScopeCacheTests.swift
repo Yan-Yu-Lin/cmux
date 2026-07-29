@@ -16,22 +16,8 @@ import Darwin
 // must not interleave with each other.
 @Suite(.serialized)
 struct CmuxTopSnapshotScopeCacheTests {
-    // ~1s, well within the negative TTL.
     static let nowNanoseconds: UInt64 = 1_000_000_000
-    static let afterNegativeTTLNanoseconds = nowNanoseconds
-        + cmuxTopNegativeScopeTTLNanoseconds
-        + 1
-
-    @Test func negativeScopeRefreshWindowScalesWithLargeProcessTables() {
-        #expect(
-            CmuxTopProcessSnapshot.negativeScopeTTLNanoseconds(processCount: 600)
-                == cmuxTopNegativeScopeTTLNanoseconds
-        )
-        #expect(
-            CmuxTopProcessSnapshot.negativeScopeTTLNanoseconds(processCount: 5_000)
-                == 500 * 1_000_000_000
-        )
-    }
+    static let muchLaterNanoseconds: UInt64 = 1_000_000_000_000
 
     @Test func discoveryKeepsScopedProcessesAndTheirUnscopedDescendants() {
         let included = CmuxTopProcessSnapshot.discoveryIncludedPIDs(
@@ -90,8 +76,9 @@ struct CmuxTopSnapshotScopeCacheTests {
 
     // Before the fix, a process with no cmux scope was a permanent cache miss, so
     // every system.top poll re-ran the 3-sysctl probe for every non-cmux process
-    // on the machine. The negative result must now be cached within the TTL.
-    @Test func negativeScopeResultIsCachedWithinTTL() {
+    // on the machine. The negative result must stay cached until process identity
+    // changes or the exec monitor invalidates it.
+    @Test func negativeScopeResultIsCachedBetweenExecEvents() {
         CmuxTopProcessSnapshot.pruneCMUXScopeCache(activeKeys: [])
         let cacheKey = CmuxTopProcessScopeCacheKey(
             pid: 901_001,
@@ -107,11 +94,11 @@ struct CmuxTopSnapshotScopeCacheTests {
         let first = CmuxTopProcessSnapshot.cachedCMUXScope(
             for: 901_001, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
         let second = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_001, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_001, cacheKey: cacheKey, nowNanoseconds: Self.muchLaterNanoseconds, probe: probe)
 
         #expect(first == nil)
         #expect(second == nil)
-        #expect(probeCount == 1, "non-cmux process should be probed once per TTL, not on every poll")
+        #expect(probeCount == 1, "non-cmux process should not be re-probed without an exec")
     }
 
     @Test func positiveScopeResultIsCachedAcrossPolls() {
@@ -132,11 +119,11 @@ struct CmuxTopSnapshotScopeCacheTests {
             return .resolved(expected)
         }
 
-        // A discovered scope is cached indefinitely, even far past the negative TTL.
+        // A discovered scope is cached indefinitely.
         let first = CmuxTopProcessSnapshot.cachedCMUXScope(
             for: 901_002, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
         let second = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_002, cacheKey: cacheKey, nowNanoseconds: Self.afterNegativeTTLNanoseconds, probe: probe)
+            for: 901_002, cacheKey: cacheKey, nowNanoseconds: Self.muchLaterNanoseconds, probe: probe)
 
         #expect(first == expected)
         #expect(second == expected)
@@ -181,11 +168,9 @@ struct CmuxTopSnapshotScopeCacheTests {
         #expect(probeCount == 3, "transient failures retry; the resolved result is cached")
     }
 
-    // The cache key is (pid, process start time), which an `exec` does not change.
-    // A process first sampled in its fork-before-exec window, or one that execs
-    // into a cmux-scoped command later, must be re-probed once the negative TTL
-    // elapses so it is eventually attributed (https://github.com/manaflow-ai/cmux/issues/5756).
-    @Test func negativeScopeIsReprobedAfterTTLExpiry() {
+    // A same-name `exec` preserves every field in the cache key, so the process
+    // event monitor must invalidate the old negative before the next lookup.
+    @Test func negativeScopeIsReprobedAfterExecInvalidation() {
         CmuxTopProcessSnapshot.pruneCMUXScopeCache(activeKeys: [])
         let cacheKey = CmuxTopProcessScopeCacheKey(
             pid: 901_004,
@@ -207,20 +192,69 @@ struct CmuxTopSnapshotScopeCacheTests {
         // Sampled pre-exec: no scope yet, cached negative.
         let preExec = CmuxTopProcessSnapshot.cachedCMUXScope(
             for: 901_004, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
-        // Polled again within the TTL: served from the negative cache, no re-probe.
+        // Polled again without an exec: served from the negative cache.
         let withinTTL = CmuxTopProcessSnapshot.cachedCMUXScope(
             for: 901_004, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
         #expect(preExec == nil)
         #expect(withinTTL == nil)
         #expect(probeCount == 1)
 
-        // Process has since execed into a cmux-scoped command; after the TTL the
-        // negative entry expires and the next poll re-probes and attributes it.
+        // The process has since execed into a cmux-scoped command without changing
+        // its cache key. The event monitor invalidates the old negative.
         resolvedScope = postExecScope
-        let afterExpiry = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_004, cacheKey: cacheKey, nowNanoseconds: Self.afterNegativeTTLNanoseconds, probe: probe)
-        #expect(afterExpiry == postExecScope)
-        #expect(probeCount == 2, "expired negative entry must be re-probed")
+        CmuxTopProcessSnapshot.invalidateCMUXScopeCache(forPIDs: [901_004])
+        let afterExec = CmuxTopProcessSnapshot.cachedCMUXScope(
+            for: 901_004, cacheKey: cacheKey, nowNanoseconds: Self.muchLaterNanoseconds, probe: probe)
+        #expect(afterExec == postExecScope)
+        #expect(probeCount == 2, "exec-invalidated negative entry must be re-probed")
+    }
+
+    @Test func processExecMonitorReportsSameNameExec() throws {
+        let input = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "read ignored; exec /bin/sh -c 'sleep 2'"]
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer {
+            if process.isRunning {
+                process.terminate()
+                process.waitUntilExit()
+            }
+        }
+
+        let pid = Int(process.processIdentifier)
+        let initialInfo = try #require(CmuxTopProcessSnapshot.bsdInfo(for: pid))
+        let initialKey = CmuxTopProcessSnapshot.scopeCacheKey(from: initialInfo)
+        _ = CmuxTopProcessSnapshot.synchronizeCMUXScopeExecMonitor(
+            activeKeysByPID: [pid: initialKey],
+            watchablePIDs: [pid]
+        )
+
+        input.fileHandleForWriting.write(Data([0x0A]))
+        input.fileHandleForWriting.closeFile()
+
+        var observedExec = false
+        var postExecKey: CmuxTopProcessScopeCacheKey?
+        for _ in 0..<100 {
+            Thread.sleep(forTimeInterval: 0.02)
+            guard let info = CmuxTopProcessSnapshot.bsdInfo(for: pid) else { continue }
+            let key = CmuxTopProcessSnapshot.scopeCacheKey(from: info)
+            let invalidatedPIDs = CmuxTopProcessSnapshot.synchronizeCMUXScopeExecMonitor(
+                activeKeysByPID: [pid: key],
+                watchablePIDs: [pid]
+            )
+            if invalidatedPIDs.contains(pid) {
+                observedExec = true
+                postExecKey = key
+                break
+            }
+        }
+
+        #expect(observedExec)
+        #expect(postExecKey?.executableName == initialKey.executableName)
     }
 
     @Test func liveProcessScopeProbeResolves() throws {
