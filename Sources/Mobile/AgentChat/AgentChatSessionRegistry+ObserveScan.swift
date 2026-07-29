@@ -194,10 +194,7 @@ extension AgentChatSessionRegistry {
         preferredCodexSessionIDBySurfaceID: [String: String]
     ) -> [ObservedAgentSession] {
         guard !Task.isCancelled else { return [] }
-        let snapshot = CmuxTopProcessSnapshot.capture(
-            includeProcessDetails: true,
-            includeCMUXScope: true
-        )
+        let snapshot = CmuxTopProcessSnapshot.captureDiscoveryCached(maximumAge: 0.25)
         guard !Task.isCancelled else { return [] }
         return scanObservedAgentSessions(
             in: snapshot,

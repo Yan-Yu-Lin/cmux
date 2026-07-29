@@ -28,7 +28,7 @@ enum MobileHostIdentity {
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) -> String {
         if let id = readSharedDeviceID(from: sharedIDURL) {
-            defaults.set(id, forKey: deviceIDKey)
+            persistDeviceIDIfChanged(id, defaults: defaults)
             return id
         }
 
@@ -86,7 +86,7 @@ enum MobileHostIdentity {
     private static func settleSharedDeviceID(_ candidate: String, defaults: UserDefaults, sharedIDURL: URL?) -> String {
         let candidate = cmxCanonicalDeviceID(candidate)
         guard let sharedIDURL else {
-            defaults.set(candidate, forKey: deviceIDKey)
+            persistDeviceIDIfChanged(candidate, defaults: defaults)
             return candidate
         }
         try? FileManager.default.createDirectory(
@@ -96,14 +96,19 @@ enum MobileHostIdentity {
         let data = Data(candidate.utf8)
         if !FileManager.default.createFile(atPath: sharedIDURL.path, contents: data) {
             if let winner = readSharedDeviceID(from: sharedIDURL) {
-                defaults.set(winner, forKey: deviceIDKey)
+                persistDeviceIDIfChanged(winner, defaults: defaults)
                 return winner
             }
             try? data.write(to: sharedIDURL, options: .atomic)
         }
         let settled = readSharedDeviceID(from: sharedIDURL) ?? candidate
-        defaults.set(settled, forKey: deviceIDKey)
+        persistDeviceIDIfChanged(settled, defaults: defaults)
         return settled
+    }
+
+    private static func persistDeviceIDIfChanged(_ deviceID: String, defaults: UserDefaults) {
+        guard defaults.string(forKey: deviceIDKey) != deviceID else { return }
+        defaults.set(deviceID, forKey: deviceIDKey)
     }
 
     /// Stable physical-device name. Device-level registry and backup rows use

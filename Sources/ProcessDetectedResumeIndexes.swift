@@ -20,9 +20,9 @@ struct ProcessDetectedResumeIndexes: Sendable {
     ) -> ProcessDetectedResumeIndexes {
         let capturedAt = Date().timeIntervalSince1970
         let processSnapshot = if let maximumSnapshotAge {
-            CmuxTopProcessSnapshot.captureCached(includeProcessDetails: true, maximumAge: maximumSnapshotAge)
+            CmuxTopProcessSnapshot.captureDiscoveryCached(maximumAge: maximumSnapshotAge)
         } else {
-            CmuxTopProcessSnapshot.capture(includeProcessDetails: true)
+            CmuxTopProcessSnapshot.captureDiscovery()
         }
         let registry = CmuxVaultAgentRegistry.load(homeDirectory: homeDirectory, fileManager: fileManager)
         let detectedSnapshots = RestorableAgentSessionIndex.processDetectedSnapshots(

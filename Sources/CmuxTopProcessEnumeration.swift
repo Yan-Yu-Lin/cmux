@@ -4,6 +4,166 @@ import Foundation
 private nonisolated let cmuxTopPIDPathBufferSize = 4096
 
 extension CmuxTopProcessSnapshot {
+    /// Samples one process for diagnostics without enumerating the system.
+    static func resourceInfo(for pid: Int) -> CmuxTopProcessInfo? {
+        guard let bsdInfo = bsdInfo(for: pid) else { return nil }
+        var cpuSamples: [CmuxTopProcessScopeCacheKey: CmuxTopProcessCPUSample] = [:]
+        return processInfo(
+            from: bsdInfo,
+            includeProcessDetails: false,
+            includeCMUXScope: false,
+            sampledAtNanoseconds: cpuSampleClockNanoseconds(),
+            currentCPUSamples: &cpuSamples
+        )?.info
+    }
+
+    /// Captures the process topology used by agent discovery and session restore
+    /// without sampling CPU or memory for every process on the machine.
+    static func captureDiscovery() -> CmuxTopProcessSnapshot {
+        let sampledAt = Date()
+        let sampledProcesses = allBSDProcesses()
+        guard !sampledProcesses.isEmpty else {
+            return CmuxTopProcessSnapshot(
+                processes: [],
+                sampledAt: sampledAt,
+                includesProcessDetails: true,
+                includesCMUXScope: true
+            )
+        }
+
+        let sampledAtNanoseconds = cpuSampleClockNanoseconds()
+        var activeScopeKeys: Set<CmuxTopProcessScopeCacheKey> = []
+        activeScopeKeys.reserveCapacity(sampledProcesses.count)
+        var scopeByPID: [Int: CmuxTopProcessScope] = [:]
+        var parentPIDByPID: [Int: Int] = [:]
+        parentPIDByPID.reserveCapacity(sampledProcesses.count)
+
+        for process in sampledProcesses {
+            let pid = Int(process.pbi_pid)
+            guard pid > 0 else { continue }
+            let cacheKey = scopeCacheKey(from: process)
+            activeScopeKeys.insert(cacheKey)
+            parentPIDByPID[pid] = Int(process.pbi_ppid)
+            if let scope = cachedCMUXScope(
+                for: pid,
+                cacheKey: cacheKey,
+                nowNanoseconds: sampledAtNanoseconds
+            ) {
+                scopeByPID[pid] = scope
+            }
+        }
+        pruneCMUXScopeCache(activeKeys: activeScopeKeys)
+
+        let includedPIDs = discoveryIncludedPIDs(
+            parentPIDByPID: parentPIDByPID,
+            scopedPIDs: Set(scopeByPID.keys)
+        )
+        let processes = sampledProcesses.compactMap { process -> CmuxTopProcessInfo? in
+            let pid = Int(process.pbi_pid)
+            guard includedPIDs.contains(pid) else { return nil }
+            return discoveryProcessInfo(from: process, scope: scopeByPID[pid])
+        }
+        return CmuxTopProcessSnapshot(
+            processes: processes,
+            sampledAt: sampledAt,
+            includesProcessDetails: true,
+            includesCMUXScope: true
+        )
+    }
+
+    /// Samples resources only for pane-owned process trees.
+    static func captureResources(
+        rootPIDs explicitRootPIDs: Set<Int>,
+        ttyDevices: Set<Int64>,
+        cmuxSurfaceIDs: Set<UUID>
+    ) -> CmuxTopProcessSnapshot {
+        let sampledAt = Date()
+        let sampledProcesses = allBSDProcesses()
+        guard !sampledProcesses.isEmpty else {
+            return CmuxTopProcessSnapshot(
+                processes: [],
+                sampledAt: sampledAt,
+                includesProcessDetails: false,
+                includesCMUXScope: !cmuxSurfaceIDs.isEmpty
+            )
+        }
+
+        let includesCMUXScope = !cmuxSurfaceIDs.isEmpty
+        let sampledAtNanoseconds = cpuSampleClockNanoseconds()
+        var activeScopeKeys: Set<CmuxTopProcessScopeCacheKey> = []
+        var scopeByPID: [Int: CmuxTopProcessScope] = [:]
+        var parentPIDByPID: [Int: Int] = [:]
+        parentPIDByPID.reserveCapacity(sampledProcesses.count)
+        var rootPIDs = Set(explicitRootPIDs.filter { $0 > 0 })
+
+        if includesCMUXScope {
+            activeScopeKeys.reserveCapacity(sampledProcesses.count)
+        }
+        for process in sampledProcesses {
+            let pid = Int(process.pbi_pid)
+            guard pid > 0 else { continue }
+            parentPIDByPID[pid] = Int(process.pbi_ppid)
+            if ttyDevices.contains(Int64(process.e_tdev)) {
+                rootPIDs.insert(pid)
+            }
+            guard includesCMUXScope else { continue }
+            let cacheKey = scopeCacheKey(from: process)
+            activeScopeKeys.insert(cacheKey)
+            if let scope = cachedCMUXScope(
+                for: pid,
+                cacheKey: cacheKey,
+                nowNanoseconds: sampledAtNanoseconds
+            ) {
+                scopeByPID[pid] = scope
+                if let surfaceID = scope.surfaceID,
+                   cmuxSurfaceIDs.contains(surfaceID) {
+                    rootPIDs.insert(pid)
+                }
+            }
+        }
+        if includesCMUXScope {
+            pruneCMUXScopeCache(activeKeys: activeScopeKeys)
+        }
+
+        let includedPIDs = discoveryIncludedPIDs(
+            parentPIDByPID: parentPIDByPID,
+            scopedPIDs: rootPIDs
+        )
+        let processes = sampledProcesses.compactMap { process -> CmuxTopProcessInfo? in
+            let pid = Int(process.pbi_pid)
+            guard includedPIDs.contains(pid) else { return nil }
+            return targetedResourceProcessInfo(from: process, scope: scopeByPID[pid])
+        }
+        return CmuxTopProcessSnapshot(
+            processes: processes,
+            sampledAt: sampledAt,
+            includesProcessDetails: false,
+            includesCMUXScope: includesCMUXScope
+        )
+    }
+
+    /// Returns scoped processes plus every descendant needed to classify agent
+    /// binaries that intentionally scrub their inherited cmux environment.
+    static func discoveryIncludedPIDs(
+        parentPIDByPID: [Int: Int],
+        scopedPIDs: Set<Int>
+    ) -> Set<Int> {
+        guard !scopedPIDs.isEmpty else { return [] }
+        var childrenByParentPID: [Int: [Int]] = [:]
+        childrenByParentPID.reserveCapacity(parentPIDByPID.count)
+        for (pid, parentPID) in parentPIDByPID where pid > 0 && parentPID > 0 {
+            childrenByParentPID[parentPID, default: []].append(pid)
+        }
+
+        var included: Set<Int> = []
+        var pending = Array(scopedPIDs)
+        while let pid = pending.popLast() {
+            guard included.insert(pid).inserted else { continue }
+            pending.append(contentsOf: childrenByParentPID[pid] ?? [])
+        }
+        return included
+    }
+
     static func allProcesses(includeProcessDetails: Bool, includeCMUXScope: Bool) -> [CmuxTopProcessInfo] {
         let sampledProcesses = allBSDProcesses()
         guard !sampledProcesses.isEmpty else { return [] }
@@ -53,6 +213,98 @@ extension CmuxTopProcessSnapshot {
             pruneCMUXScopeCache(activeKeys: activeScopeKeys)
         }
         return processRecords.map(\.info)
+    }
+
+    private static func discoveryProcessInfo(
+        from bsdInfo: proc_bsdinfo,
+        scope: CmuxTopProcessScope?
+    ) -> CmuxTopProcessInfo? {
+        let pid = Int(bsdInfo.pbi_pid)
+        guard pid > 0 else { return nil }
+        let fallbackName = fixedString(bsdInfo.pbi_comm)
+        let name = processName(pid: pid, fallback: fallbackName)
+        let rawTTY = Int64(bsdInfo.e_tdev)
+        let rawProcessGroupID = Int(bsdInfo.pbi_pgid)
+        let rawTerminalProcessGroupID = Int(bsdInfo.e_tpgid)
+        return CmuxTopProcessInfo(
+            pid: pid,
+            parentPID: Int(bsdInfo.pbi_ppid),
+            name: name.isEmpty ? "pid-\(pid)" : name,
+            path: processPath(pid: pid),
+            ttyDevice: rawTTY > 0 ? rawTTY : nil,
+            cmuxWorkspaceID: scope?.workspaceID,
+            cmuxSurfaceID: scope?.surfaceID,
+            cmuxAttributionReason: scope?.attributionReason,
+            processGroupID: rawProcessGroupID > 0 ? rawProcessGroupID : nil,
+            terminalProcessGroupID: rawTerminalProcessGroupID > 0 ? rawTerminalProcessGroupID : nil,
+            cpuPercent: 0,
+            memoryBytes: 0,
+            memorySource: .unavailable,
+            residentBytes: 0,
+            residentMemorySource: .unavailable,
+            virtualBytes: 0,
+            threadCount: 0
+        )
+    }
+
+    private static func targetedResourceProcessInfo(
+        from bsdInfo: proc_bsdinfo,
+        scope: CmuxTopProcessScope?
+    ) -> CmuxTopProcessInfo? {
+        let pid = Int(bsdInfo.pbi_pid)
+        guard pid > 0 else { return nil }
+        let taskInfo = taskInfo(for: pid)
+        let resourceUsage = resourceUsage(for: pid)
+        let fallbackName = fixedString(bsdInfo.pbi_comm)
+        let rawTTY = Int64(bsdInfo.e_tdev)
+        let rawProcessGroupID = Int(bsdInfo.pbi_pgid)
+        let rawTerminalProcessGroupID = Int(bsdInfo.e_tpgid)
+
+        let memoryBytes: Int64
+        let memorySource: CmuxTopProcessMemorySource
+        if let resourceUsage {
+            memoryBytes = int64Clamped(resourceUsage.ri_phys_footprint)
+            memorySource = .physicalFootprint
+        } else if let taskInfo {
+            memoryBytes = int64Clamped(taskInfo.pti_resident_size)
+            memorySource = .residentSize
+        } else {
+            memoryBytes = 0
+            memorySource = .unavailable
+        }
+
+        let residentBytes: Int64
+        let residentMemorySource: CmuxTopProcessMemorySource
+        if let taskInfo {
+            residentBytes = int64Clamped(taskInfo.pti_resident_size)
+            residentMemorySource = .residentSize
+        } else if let resourceUsage {
+            residentBytes = int64Clamped(resourceUsage.ri_resident_size)
+            residentMemorySource = .rusageResidentSize
+        } else {
+            residentBytes = 0
+            residentMemorySource = .unavailable
+        }
+
+        return CmuxTopProcessInfo(
+            pid: pid,
+            parentPID: Int(bsdInfo.pbi_ppid),
+            name: fallbackName.isEmpty ? "pid-\(pid)" : fallbackName,
+            path: nil,
+            ttyDevice: rawTTY > 0 ? rawTTY : nil,
+            cmuxWorkspaceID: scope?.workspaceID,
+            cmuxSurfaceID: scope?.surfaceID,
+            cmuxAttributionReason: scope?.attributionReason,
+            processGroupID: rawProcessGroupID > 0 ? rawProcessGroupID : nil,
+            terminalProcessGroupID: rawTerminalProcessGroupID > 0 ? rawTerminalProcessGroupID : nil,
+            cpuPercent: 0,
+            memoryBytes: memoryBytes,
+            memorySource: memorySource,
+            residentBytes: residentBytes,
+            residentMemorySource: residentMemorySource,
+            virtualBytes: int64Clamped(taskInfo?.pti_virtual_size ?? 0),
+            threadCount: Int(taskInfo?.pti_threadnum ?? 0)
+        )
     }
 
     static func deviceIdentifier(forTTYName ttyName: String) -> Int64? {

@@ -23,7 +23,7 @@ struct SharedLiveAgentIndexLoader {
         fileManager: FileManager = .default,
         registry: CmuxVaultAgentRegistry? = nil,
         processSnapshotProvider: @escaping () -> CmuxTopProcessSnapshot = {
-            CmuxTopProcessSnapshot.capture(includeProcessDetails: true)
+            CmuxTopProcessSnapshot.captureDiscoveryCached(maximumAge: 0.25)
         },
         capturedAtProvider: @escaping () -> TimeInterval = {
             Date().timeIntervalSince1970

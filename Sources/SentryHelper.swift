@@ -93,13 +93,9 @@ private func sentryScheduleMemoryContextRefresh(
 func sentryRefreshMemoryContext(reason: String) async {
     guard SentrySDK.isEnabled else { return }
 
-    let processSnapshot = CmuxTopProcessSnapshot.captureCached(
-        includeProcessDetails: false,
-        maximumAge: 2
-    )
     let pid = Int(Darwin.getpid())
-    let appProcess = processSnapshot.process(pid: pid)
-    let sampledAt = ISO8601DateFormatter().string(from: processSnapshot.sampledAt)
+    let appProcess = CmuxTopProcessSnapshot.resourceInfo(for: pid)
+    let sampledAt = ISO8601DateFormatter().string(from: Date())
     let physicalFootprintBytes = appProcess?.memoryBytes ?? 0
     let residentBytes = appProcess?.residentBytes ?? 0
     let virtualBytes = appProcess?.virtualBytes ?? 0

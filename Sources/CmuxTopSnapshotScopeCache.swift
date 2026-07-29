@@ -6,27 +6,39 @@ struct CmuxTopProcessScopeCacheKey: Hashable {
     let pid: Int
     let startSeconds: Int
     let startMicroseconds: Int
+    let executableName: String
+
+    init(
+        pid: Int,
+        startSeconds: Int,
+        startMicroseconds: Int,
+        executableName: String = ""
+    ) {
+        self.pid = pid
+        self.startSeconds = startSeconds
+        self.startMicroseconds = startMicroseconds
+        self.executableName = executableName
+    }
 }
 
 private struct CmuxTopProcessScopeCacheValue {
     // nil means "this process was probed and has no cmux scope". A negative entry
     // is honored as a hit only until `negativeExpiresAtNanos`, so a non-cmux
     // process is re-probed at most once per TTL window instead of on every
-    // system.top poll. Positive entries never expire (`negativeExpiresAtNanos` is
-    // ignored when `scope != nil`): a cmux scope comes from inherited environment
-    // or a stable argv and does not disappear for the process lifetime.
+    // system.top poll. Expiration phases are distributed across that window to
+    // avoid a machine-wide re-probe burst. Positive entries never expire
+    // (`negativeExpiresAtNanos` is ignored when `scope != nil`): a cmux scope
+    // comes from inherited environment or a stable argv and does not disappear
+    // for the process lifetime.
     let scope: CmuxTopProcessScope?
     let negativeExpiresAtNanos: UInt64
 }
 
-// How long a "no cmux scope" result stays cached before the process is probed
-// again. The scope is derived from argv/environment, which an `exec` can change
-// without changing the pid or process start time (the cache key), so a process
-// first sampled in its fork-before-exec window, or one that execs into a
-// `cmux hooks … monitor` later, must be re-probed eventually or it would never
-// be attributed. A newly spawned process has a new cache key and is probed
-// immediately; this TTL only bounds attribution latency for same-pid execs while
-// collapsing the steady-state re-probe storm for non-cmux processes.
+// Maximum time a "no cmux scope" result stays cached before the process is
+// probed again. The key includes the kernel executable name, so ordinary execs
+// invalidate immediately. The TTL still covers same-name execs that change argv
+// or environment without changing the pid, start time, or executable name.
+// Newly spawned processes have new keys and are probed immediately.
 // Internal (not private) so tests can read the TTL via @testable import.
 nonisolated let cmuxTopNegativeScopeTTLNanoseconds: UInt64 = 60 * 1_000_000_000
 
@@ -53,7 +65,8 @@ extension CmuxTopProcessSnapshot {
         return CmuxTopProcessScopeCacheKey(
             pid: Int(kinfo.kp_proc.p_pid),
             startSeconds: Int(startTime.tv_sec),
-            startMicroseconds: Int(startTime.tv_usec)
+            startMicroseconds: Int(startTime.tv_usec),
+            executableName: scopeCacheExecutableName(kinfo.kp_proc.p_comm)
         )
     }
 
@@ -61,7 +74,8 @@ extension CmuxTopProcessSnapshot {
         CmuxTopProcessScopeCacheKey(
             pid: Int(bsdInfo.pbi_pid),
             startSeconds: Int(bsdInfo.pbi_start_tvsec),
-            startMicroseconds: Int(bsdInfo.pbi_start_tvusec)
+            startMicroseconds: Int(bsdInfo.pbi_start_tvusec),
+            executableName: scopeCacheExecutableName(bsdInfo.pbi_comm)
         )
     }
 
@@ -103,7 +117,10 @@ extension CmuxTopProcessSnapshot {
                 }
                 cache[cacheKey] = CmuxTopProcessScopeCacheValue(
                     scope: scope,
-                    negativeExpiresAtNanos: nowNanoseconds &+ cmuxTopNegativeScopeTTLNanoseconds
+                    negativeExpiresAtNanos: negativeScopeExpiryNanoseconds(
+                        after: nowNanoseconds,
+                        cacheKey: cacheKey
+                    )
                 )
                 return scope
             }
@@ -116,6 +133,38 @@ extension CmuxTopProcessSnapshot {
     static func pruneCMUXScopeCache(activeKeys: Set<CmuxTopProcessScopeCacheKey>) {
         cmuxTopScopeCache.withLock { cache in
             cache = cache.filter { activeKeys.contains($0.key) }
+        }
+    }
+
+    /// Assigns stable phases across the existing 60-second freshness window so
+    /// thousands of negative entries do not all expire in one snapshot.
+    private static func negativeScopeExpiryNanoseconds(
+        after nowNanoseconds: UInt64,
+        cacheKey: CmuxTopProcessScopeCacheKey
+    ) -> UInt64 {
+        let pid = UInt64(truncatingIfNeeded: cacheKey.pid)
+        let seconds = UInt64(truncatingIfNeeded: cacheKey.startSeconds)
+        let microseconds = UInt64(truncatingIfNeeded: cacheKey.startMicroseconds)
+        let nameHash = cacheKey.executableName.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
+            ($0 ^ UInt64($1)) &* 1_099_511_628_211
+        }
+        let mixed = pid &* 0x9E37_79B1_85EB_CA87
+            ^ seconds &* 0xC2B2_AE3D_27D4_EB4F
+            ^ microseconds
+            ^ nameHash
+        let phase = mixed % cmuxTopNegativeScopeTTLNanoseconds
+        let currentPhase = nowNanoseconds % cmuxTopNegativeScopeTTLNanoseconds
+        let delta = phase > currentPhase
+            ? phase - currentPhase
+            : cmuxTopNegativeScopeTTLNanoseconds - (currentPhase - phase)
+        return nowNanoseconds &+ delta
+    }
+
+    private static func scopeCacheExecutableName<T>(_ value: T) -> String {
+        withUnsafeBytes(of: value) { rawBuffer in
+            let endIndex = rawBuffer.firstIndex(of: 0) ?? rawBuffer.endIndex
+            return String(decoding: rawBuffer[..<endIndex], as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
@@ -176,10 +225,101 @@ extension CmuxTopProcessSnapshot {
     }
 
     static func cmuxScope(fromKernProcArgs bytes: [UInt8]) -> CmuxTopProcessScope? {
-        guard let process = processArgumentsAndEnvironment(fromKernProcArgs: bytes) else {
+        guard let process = cmuxScopeArgumentsAndEnvironment(fromKernProcArgs: bytes) else {
             return nil
         }
         return cmuxScope(arguments: process.arguments, environment: process.environment)
+    }
+
+    /// Decodes argv plus only the four environment keys used for cmux scope.
+    /// Full process environments can contain thousands of strings, so building
+    /// a dictionary for every system process causes avoidable allocator churn.
+    private static func cmuxScopeArgumentsAndEnvironment(
+        fromKernProcArgs bytes: [UInt8]
+    ) -> CmuxTopProcessArguments? {
+        guard bytes.count > MemoryLayout<Int32>.size else { return nil }
+
+        var argcRaw: Int32 = 0
+        withUnsafeMutableBytes(of: &argcRaw) { rawBuffer in
+            rawBuffer.copyBytes(from: bytes.prefix(MemoryLayout<Int32>.size))
+        }
+        let argc = Int(Int32(littleEndian: argcRaw))
+        guard argc > 0 else { return nil }
+
+        var index = MemoryLayout<Int32>.size
+        skipKernProcString(in: bytes, index: &index)
+        skipKernProcNulls(in: bytes, index: &index)
+
+        var arguments: [String] = []
+        arguments.reserveCapacity(argc)
+        for _ in 0..<argc {
+            guard index < bytes.count else { return nil }
+            let start = index
+            skipKernProcString(in: bytes, index: &index)
+            if let argument = String(bytes: bytes[start..<index], encoding: .utf8) {
+                arguments.append(argument)
+            }
+            consumeKernProcNull(in: bytes, index: &index)
+        }
+
+        var environment: [String: String] = [:]
+        environment.reserveCapacity(4)
+        while index < bytes.count {
+            skipKernProcNulls(in: bytes, index: &index)
+            guard index < bytes.count else { break }
+            let start = index
+            skipKernProcString(in: bytes, index: &index)
+            guard start < index,
+                  let entry = cmuxScopeEnvironmentEntry(bytes[start..<index]) else {
+                continue
+            }
+            environment[entry.key] = entry.value
+        }
+        return CmuxTopProcessArguments(arguments: arguments, environment: environment)
+    }
+
+    private static func cmuxScopeEnvironmentEntry(
+        _ bytes: ArraySlice<UInt8>
+    ) -> (key: String, value: String)? {
+        guard let equals = bytes.firstIndex(of: 0x3D) else {
+            return nil
+        }
+        let keyBytes = bytes[..<equals]
+        let key: String
+        if keyBytes.elementsEqual("CMUX_WORKSPACE_ID".utf8) {
+            key = "CMUX_WORKSPACE_ID"
+        } else if keyBytes.elementsEqual("CMUX_TAB_ID".utf8) {
+            key = "CMUX_TAB_ID"
+        } else if keyBytes.elementsEqual("CMUX_SURFACE_ID".utf8) {
+            key = "CMUX_SURFACE_ID"
+        } else if keyBytes.elementsEqual("CMUX_PANEL_ID".utf8) {
+            key = "CMUX_PANEL_ID"
+        } else {
+            return nil
+        }
+        let valueStart = bytes.index(after: equals)
+        guard let value = String(bytes: bytes[valueStart...], encoding: .utf8) else {
+            return nil
+        }
+        return (key, value)
+    }
+
+    private static func skipKernProcString(in bytes: [UInt8], index: inout Int) {
+        while index < bytes.count, bytes[index] != 0 {
+            index += 1
+        }
+    }
+
+    private static func skipKernProcNulls(in bytes: [UInt8], index: inout Int) {
+        while index < bytes.count, bytes[index] == 0 {
+            index += 1
+        }
+    }
+
+    private static func consumeKernProcNull(in bytes: [UInt8], index: inout Int) {
+        if index < bytes.count, bytes[index] == 0 {
+            index += 1
+        }
     }
 
     static func cmuxScope(arguments: [String], environment: [String: String]) -> CmuxTopProcessScope? {

@@ -5,6 +5,7 @@ private struct CmuxTopProcessSnapshotCacheState {
     var snapshot: CmuxTopProcessSnapshot?
     var includeProcessDetails = false
     var includeCMUXScope = true
+    var discoverySnapshot: CmuxTopProcessSnapshot?
 }
 
 // libproc snapshots are a short-lived platform bridge shared by the CLI, socket,
@@ -14,6 +15,30 @@ private nonisolated let cmuxTopProcessSnapshotCache = OSAllocatedUnfairLock(
 )
 
 extension CmuxTopProcessSnapshot {
+    static func captureDiscoveryCached(maximumAge: TimeInterval) -> CmuxTopProcessSnapshot {
+        let now = Date()
+        if let cached = cmuxTopProcessSnapshotCache.withLock({ state -> CmuxTopProcessSnapshot? in
+            guard let snapshot = state.discoverySnapshot,
+                  now.timeIntervalSince(snapshot.sampledAt) <= maximumAge else {
+                return nil
+            }
+            return snapshot
+        }) {
+            return cached
+        }
+
+        let snapshot = captureDiscovery()
+        return cmuxTopProcessSnapshotCache.withLock { state in
+            let storeTime = Date()
+            if let cached = state.discoverySnapshot,
+               storeTime.timeIntervalSince(cached.sampledAt) <= maximumAge {
+                return cached
+            }
+            state.discoverySnapshot = snapshot
+            return snapshot
+        }
+    }
+
     static func captureCached(
         includeProcessDetails: Bool = false,
         includeCMUXScope: Bool = true,

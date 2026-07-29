@@ -34,7 +34,7 @@ extension RestorableAgentSessionIndex {
         fileManager: FileManager
     ) -> [PanelKey: ProcessDetectedSnapshotEntry] {
         let capturedAt = Date().timeIntervalSince1970
-        let processSnapshot = CmuxTopProcessSnapshot.capture(includeProcessDetails: true)
+        let processSnapshot = CmuxTopProcessSnapshot.captureDiscovery()
         return processDetectedSnapshots(
             registry: registry,
             fileManager: fileManager,
@@ -605,7 +605,7 @@ extension SurfaceResumeBindingIndex {
     ) -> [PanelKey: (binding: SurfaceResumeBindingSnapshot, updatedAt: TimeInterval)] {
         _ = fileManager
         let capturedAt = Date().timeIntervalSince1970
-        let processSnapshot = CmuxTopProcessSnapshot.capture(includeProcessDetails: true)
+        let processSnapshot = CmuxTopProcessSnapshot.captureDiscovery()
         return processDetectedTmuxBindings(
             fileManager: fileManager,
             processSnapshot: processSnapshot,

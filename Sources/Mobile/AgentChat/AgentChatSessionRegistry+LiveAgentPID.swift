@@ -23,10 +23,7 @@ extension AgentChatSessionRegistry {
         allowUnidentifiedFallback: Bool = false
     ) -> Int? {
         guard !expectedSessionIDs.isEmpty else { return nil }
-        let snapshot = CmuxTopProcessSnapshot.capture(
-            includeProcessDetails: true,
-            includeCMUXScope: true
-        )
+        let snapshot = CmuxTopProcessSnapshot.captureDiscoveryCached(maximumAge: 0.25)
         return liveAgentPID(
             in: snapshot,
             surfaceID: surfaceID,
