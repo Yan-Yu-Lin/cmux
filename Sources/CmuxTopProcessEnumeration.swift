@@ -164,44 +164,6 @@ extension CmuxTopProcessSnapshot {
         return included
     }
 
-    /// Narrows a discovery snapshot to process trees owned by the requested
-    /// panels. Panel IDs survive normal workspace-ID rotation during restore, so
-    /// they are the stable boundary for this filter.
-    func filteringProcessTrees(
-        for panelKeys: Set<RestorableAgentSessionIndex.PanelKey>
-    ) -> CmuxTopProcessSnapshot {
-        let panelIDs = Set(panelKeys.map(\.panelId))
-        guard !panelIDs.isEmpty else {
-            return CmuxTopProcessSnapshot(
-                processes: [],
-                sampledAt: sampledAt,
-                includesProcessDetails: includesProcessDetails,
-                includesCMUXScope: includesCMUXScope
-            )
-        }
-
-        var parentPIDByPID: [Int: Int] = [:]
-        parentPIDByPID.reserveCapacity(processes.count)
-        var scopedPIDs = Set<Int>()
-        for process in processes {
-            parentPIDByPID[process.pid] = process.parentPID
-            if let panelID = process.cmuxSurfaceID,
-               panelIDs.contains(panelID) {
-                scopedPIDs.insert(process.pid)
-            }
-        }
-        let includedPIDs = Self.discoveryIncludedPIDs(
-            parentPIDByPID: parentPIDByPID,
-            scopedPIDs: scopedPIDs
-        )
-        return CmuxTopProcessSnapshot(
-            processes: processes.filter { includedPIDs.contains($0.pid) },
-            sampledAt: sampledAt,
-            includesProcessDetails: includesProcessDetails,
-            includesCMUXScope: includesCMUXScope
-        )
-    }
-
     static func allProcesses(includeProcessDetails: Bool, includeCMUXScope: Bool) -> [CmuxTopProcessInfo] {
         let sampledProcesses = allBSDProcesses()
         guard !sampledProcesses.isEmpty else { return [] }
