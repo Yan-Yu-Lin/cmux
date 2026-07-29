@@ -38,6 +38,45 @@ struct CmuxTopSnapshotScopeCacheTests {
         #expect(included == [100, 101, 102, 300])
     }
 
+    @Test func discoveryFilterKeepsOnlyRequestedPanelProcessTrees() {
+        let requestedWorkspaceID = UUID()
+        let requestedPanelID = UUID()
+        let unrelatedWorkspaceID = UUID()
+        let unrelatedPanelID = UUID()
+        let snapshot = CmuxTopProcessSnapshot(
+            processes: [
+                processInfo(
+                    pid: 100,
+                    parentPID: 1,
+                    workspaceID: requestedWorkspaceID,
+                    panelID: requestedPanelID
+                ),
+                processInfo(pid: 101, parentPID: 100),
+                processInfo(
+                    pid: 200,
+                    parentPID: 1,
+                    workspaceID: unrelatedWorkspaceID,
+                    panelID: unrelatedPanelID
+                ),
+                processInfo(pid: 201, parentPID: 200),
+            ],
+            sampledAt: Date(timeIntervalSince1970: 42),
+            includesProcessDetails: true,
+            includesCMUXScope: true
+        )
+
+        let filtered = snapshot.filteringProcessTrees(
+            for: [
+                RestorableAgentSessionIndex.PanelKey(
+                    workspaceId: requestedWorkspaceID,
+                    panelId: requestedPanelID
+                ),
+            ]
+        )
+
+        #expect(Set(filtered.processes.map(\.pid)) == [100, 101])
+    }
+
     // Before the fix, a process with no cmux scope was a permanent cache miss, so
     // every system.top poll re-ran the 3-sysctl probe for every non-cmux process
     // on the machine. The negative result must now be cached within the TTL.
@@ -189,6 +228,30 @@ struct CmuxTopSnapshotScopeCacheTests {
         case .unavailable:
             Issue.record("live process probe should resolve, even when it has no cmux scope")
         }
+    }
+
+    private func processInfo(
+        pid: Int,
+        parentPID: Int,
+        workspaceID: UUID? = nil,
+        panelID: UUID? = nil
+    ) -> CmuxTopProcessInfo {
+        CmuxTopProcessInfo(
+            pid: pid,
+            parentPID: parentPID,
+            name: "process-\(pid)",
+            path: "/usr/bin/process-\(pid)",
+            ttyDevice: nil,
+            cmuxWorkspaceID: workspaceID,
+            cmuxSurfaceID: panelID,
+            cmuxAttributionReason: workspaceID == nil && panelID == nil ? nil : "cmux-test",
+            processGroupID: nil,
+            terminalProcessGroupID: nil,
+            cpuPercent: 0,
+            residentBytes: 0,
+            virtualBytes: 0,
+            threadCount: 0
+        )
     }
 
     // capture() runs concurrently. A slower sample that probed a process before

@@ -73,6 +73,64 @@ private func XCTUnwrap<T>(
 
 struct RestorableAgentSessionIndexTests {
     @Test
+    func testRelevantPanelFilterExcludesUnrelatedHookSnapshots() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("cmux-relevant-agent-panels-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        let dir = root.appendingPathComponent("repo", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let requestedWorkspaceID = UUID()
+        let requestedPanelID = UUID()
+        let unrelatedWorkspaceID = UUID()
+        let unrelatedPanelID = UUID()
+        let requestedSessionID = "11111111-aaaa-aaaa-aaaa-111111111111"
+        let unrelatedSessionID = "22222222-bbbb-bbbb-bbbb-222222222222"
+        try writeHookStore(
+            root: root,
+            storeFilename: "gemini-hook-sessions.json",
+            sessions: [
+                requestedSessionID: driftedAgentHookRecord(
+                    launcher: "gemini",
+                    sessionId: requestedSessionID,
+                    workspaceId: requestedWorkspaceID,
+                    panelId: requestedPanelID,
+                    recordedCwd: dir.path,
+                    launchCwd: dir.path,
+                    updatedAt: 10
+                ),
+                unrelatedSessionID: driftedAgentHookRecord(
+                    launcher: "gemini",
+                    sessionId: unrelatedSessionID,
+                    workspaceId: unrelatedWorkspaceID,
+                    panelId: unrelatedPanelID,
+                    recordedCwd: dir.path,
+                    launchCwd: dir.path,
+                    updatedAt: 20
+                ),
+            ]
+        )
+
+        let index = RestorableAgentSessionIndex.load(
+            homeDirectory: root.path,
+            fileManager: fm,
+            registry: CmuxVaultAgentRegistry(registrations: []),
+            detectedSnapshots: [:],
+            relevantPanelKeys: [
+                .init(workspaceId: requestedWorkspaceID, panelId: requestedPanelID),
+            ],
+            processArgumentsProvider: { _ in nil }
+        )
+
+        XCTAssertEqual(
+            index.snapshot(workspaceId: requestedWorkspaceID, panelId: requestedPanelID)?.sessionId,
+            requestedSessionID
+        )
+        XCTAssertNil(index.snapshot(workspaceId: unrelatedWorkspaceID, panelId: unrelatedPanelID))
+    }
+
+    @Test
     func testClaudeHookSnapshotRequiresTranscriptFile() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory
