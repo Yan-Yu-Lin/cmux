@@ -22,6 +22,17 @@ struct CmuxTopSnapshotScopeCacheTests {
         + cmuxTopNegativeScopeTTLNanoseconds
         + 1
 
+    @Test func negativeScopeRefreshWindowScalesWithLargeProcessTables() {
+        #expect(
+            CmuxTopProcessSnapshot.negativeScopeTTLNanoseconds(processCount: 600)
+                == cmuxTopNegativeScopeTTLNanoseconds
+        )
+        #expect(
+            CmuxTopProcessSnapshot.negativeScopeTTLNanoseconds(processCount: 5_000)
+                == 500 * 1_000_000_000
+        )
+    }
+
     @Test func discoveryKeepsScopedProcessesAndTheirUnscopedDescendants() {
         let included = CmuxTopProcessSnapshot.discoveryIncludedPIDs(
             parentPIDByPID: [
