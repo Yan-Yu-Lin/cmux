@@ -176,6 +176,34 @@ struct MobileHostIdentityTests {
         #expect(defaults.string(forKey: "mobileHost.deviceID") == sharedID.lowercased())
     }
 
+    @Test func readingUnchangedSharedIDDoesNotNotifyDefaultsObservers() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sharedIDURL = directory.appendingPathComponent("mobile-host-device-id")
+        let sharedID = "6385cda1-8d41-43a6-9a3d-3d7a66f4d963"
+        try sharedID.write(to: sharedIDURL, atomically: true, encoding: .utf8)
+
+        let suiteName = "mobile-host-identity-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(sharedID, forKey: "mobileHost.deviceID")
+
+        var notificationCount = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: defaults,
+            queue: nil
+        ) { _ in
+            notificationCount += 1
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        #expect(MobileHostIdentity.deviceID(defaults: defaults, sharedIDURL: sharedIDURL) == sharedID)
+        #expect(notificationCount == 0)
+    }
+
     @Test func migratesExistingBundleIDToSharedFile() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
