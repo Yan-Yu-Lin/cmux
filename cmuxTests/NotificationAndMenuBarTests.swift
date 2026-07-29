@@ -320,6 +320,19 @@ final class TerminalNotificationPolicyEngineTests: XCTestCase {
 
 @MainActor
 final class AppIconSettingsTests: XCTestCase {
+    func testRuntimeIconUsesRetinaDockResolutionWithoutRetainingSourceResolution() throws {
+        let source = NSImage(size: NSSize(width: 1024, height: 1024))
+
+        let prepared = try XCTUnwrap(AppIconRuntimeImage.prepared(source))
+        let bitmap = try XCTUnwrap(
+            prepared.representations.compactMap { $0 as? NSBitmapImageRep }.first
+        )
+
+        XCTAssertEqual(prepared.size, NSSize(width: 128, height: 128))
+        XCTAssertEqual(bitmap.pixelsWide, 256)
+        XCTAssertEqual(bitmap.pixelsHigh, 256)
+    }
+
     func testApplyDarkSetsRuntimeIconAndNotifiesDockTilePlugin() {
         let expectedIcon = NSImage(size: NSSize(width: 16, height: 16))
         var receivedRuntimeIcon: NSImage?
