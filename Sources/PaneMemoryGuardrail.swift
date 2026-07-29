@@ -107,12 +107,12 @@ final class PaneMemoryGuardrail {
         thresholdBytes: Int64,
         includeCMUXScope: Bool = false
     ) -> PaneMemoryGuardrailSampleBatch {
-        let foregroundPIDs = Set(descriptors.compactMap(\.foregroundPID))
-        let ttyDevices = Set(descriptors.compactMap { descriptor in
+        let foregroundPIDs: Set<Int> = Set(descriptors.compactMap(\.foregroundPID))
+        let ttyDevices: Set<Int64> = Set(descriptors.compactMap { descriptor -> Int64? in
             guard let ttyName = descriptor.ttyName else { return nil }
             return CmuxTopProcessSnapshot.deviceIdentifier(forTTYName: ttyName)
         })
-        let surfaceIDs = includeCMUXScope ? Set(descriptors.map(\.panelId)) : []
+        let surfaceIDs: Set<UUID> = includeCMUXScope ? Set(descriptors.map(\.panelId)) : []
         let snapshot = CmuxTopProcessSnapshot.captureResources(
             rootPIDs: foregroundPIDs,
             ttyDevices: ttyDevices,
