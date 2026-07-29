@@ -22,6 +22,22 @@ struct CmuxTopSnapshotScopeCacheTests {
         + cmuxTopNegativeScopeTTLNanoseconds
         + 1
 
+    @Test func discoveryKeepsScopedProcessesAndTheirUnscopedDescendants() {
+        let included = CmuxTopProcessSnapshot.discoveryIncludedPIDs(
+            parentPIDByPID: [
+                100: 1,
+                101: 100,
+                102: 101,
+                200: 1,
+                201: 200,
+                300: 1,
+            ],
+            scopedPIDs: [100, 300]
+        )
+
+        #expect(included == [100, 101, 102, 300])
+    }
+
     // Before the fix, a process with no cmux scope was a permanent cache miss, so
     // every system.top poll re-ran the 3-sysctl probe for every non-cmux process
     // on the machine. The negative result must now be cached within the TTL.
