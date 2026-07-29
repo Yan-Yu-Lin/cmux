@@ -1074,6 +1074,7 @@ struct RestorableAgentSessionIndex: Sendable {
         fileManager: FileManager,
         registry: CmuxVaultAgentRegistry,
         detectedSnapshots: [PanelKey: ProcessDetectedSnapshotEntry],
+        relevantPanelKeys: Set<PanelKey>? = nil,
         processArgumentsProvider: (Int) -> CmuxTopProcessArguments? = {
             CmuxTopProcessSnapshot.processArgumentsAndEnvironment(for: $0)
         },
@@ -1094,6 +1095,15 @@ struct RestorableAgentSessionIndex: Sendable {
         )
         let codexCwdLookup = CodexSessionCwdLookupCache(fileManager: fileManager)
         let cachedAgentProcessValidator = CachedAgentProcessIdentityValidator()
+        let relevantPanelIDs = relevantPanelKeys.map { Set($0.map(\.panelId)) }
+        let relevantDetectedSnapshots = if let relevantPanelIDs {
+            detectedSnapshots.filter { relevantPanelIDs.contains($0.key.panelId) }
+        } else {
+            detectedSnapshots
+        }
+        let relevantDetectedSessionKeys = Set(relevantDetectedSnapshots.values.map {
+            SessionKey(kind: $0.snapshot.kind, sessionId: $0.snapshot.sessionId)
+        })
         let builtInKindIDs = Set(RestorableAgentKind.allCases.map(\.rawValue))
         let hookKinds: [(kind: RestorableAgentKind, registration: CmuxVaultAgentRegistration?)] =
             RestorableAgentKind.allCases.map { (kind: $0, registration: nil) }
@@ -1132,15 +1142,21 @@ struct RestorableAgentSessionIndex: Sendable {
                 let normalizedSessionId = effectiveRecord.sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !normalizedSessionId.isEmpty,
                       let workspaceId = UUID(uuidString: effectiveRecord.workspaceId),
-                      let panelId = UUID(uuidString: effectiveRecord.surfaceId),
-                      hookRecordIsRestorable(
-                          effectiveRecord,
-                          kind: kind,
-                          fileManager: fileManager,
-                          claudeTranscriptLookup: claudeTranscriptLookup
-                      ) else {
+                      let panelId = UUID(uuidString: effectiveRecord.surfaceId) else {
                     continue
                 }
+                let sessionKey = SessionKey(kind: kind, sessionId: normalizedSessionId)
+                if let relevantPanelIDs,
+                   !relevantPanelIDs.contains(panelId),
+                   !relevantDetectedSessionKeys.contains(sessionKey) {
+                    continue
+                }
+                guard hookRecordIsRestorable(
+                    effectiveRecord,
+                    kind: kind,
+                    fileManager: fileManager,
+                    claudeTranscriptLookup: claudeTranscriptLookup
+                ) else { continue }
 
                 let snapshot = SessionRestorableAgentSnapshot(
                     kind: kind,
@@ -1158,7 +1174,6 @@ struct RestorableAgentSessionIndex: Sendable {
                     permissionMode: effectiveRecord.lastPermissionMode
                 )
                 let key = PanelKey(workspaceId: workspaceId, panelId: panelId)
-                let sessionKey = SessionKey(kind: kind, sessionId: normalizedSessionId)
                 let panelKindKey = PanelKindKey(panelKey: key, kind: kind)
                 let panelIDKindKey = PanelIDKindKey(panelId: panelId, kind: kind)
                 let recordedProcessIdentity: AgentPIDProcessIdentity? = {
@@ -1264,7 +1279,7 @@ struct RestorableAgentSessionIndex: Sendable {
             )
         }
 
-        for (key, detected) in detectedSnapshots {
+        for (key, detected) in relevantDetectedSnapshots {
             let sameKindPanelCandidate = hookCandidatesByPanelAndKind[
                 PanelKindKey(panelKey: key, kind: detected.snapshot.kind)
             ]
@@ -1313,7 +1328,7 @@ struct RestorableAgentSessionIndex: Sendable {
             }
         }
 
-        let liveDetectedSessionKeys = Set(detectedSnapshots.values.compactMap { detected -> SessionKey? in
+        let liveDetectedSessionKeys = Set(relevantDetectedSnapshots.values.compactMap { detected -> SessionKey? in
             guard !detected.processIDs.isEmpty,
                   case .explicit = detected.sessionIDSource else {
                 return nil
@@ -1324,7 +1339,7 @@ struct RestorableAgentSessionIndex: Sendable {
             // A live explicit detection owns the session's current panel; stale
             // hook-store records for that same session should not remain forkable.
             resolved = resolved.filter { key, entry in
-                if detectedSnapshots[key] != nil {
+                if relevantDetectedSnapshots[key] != nil {
                     return true
                 }
                 return !liveDetectedSessionKeys.contains(

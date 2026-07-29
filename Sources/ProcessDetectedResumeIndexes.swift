@@ -6,24 +6,34 @@ struct ProcessDetectedResumeIndexes: Sendable {
 
     static func load(
         homeDirectory: String = NSHomeDirectory(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        relevantPanelKeys: Set<RestorableAgentSessionIndex.PanelKey>? = nil
     ) async -> ProcessDetectedResumeIndexes {
         await Task.detached(priority: .utility) {
-            loadSynchronously(homeDirectory: homeDirectory, fileManager: fileManager, maximumSnapshotAge: 5)
+            loadSynchronously(
+                homeDirectory: homeDirectory,
+                fileManager: fileManager,
+                maximumSnapshotAge: 5,
+                relevantPanelKeys: relevantPanelKeys
+            )
         }.value
     }
 
     static func loadSynchronously(
         homeDirectory: String = NSHomeDirectory(),
         fileManager: FileManager = .default,
-        maximumSnapshotAge: TimeInterval? = nil
+        maximumSnapshotAge: TimeInterval? = nil,
+        relevantPanelKeys: Set<RestorableAgentSessionIndex.PanelKey>? = nil
     ) -> ProcessDetectedResumeIndexes {
         let capturedAt = Date().timeIntervalSince1970
-        let processSnapshot = if let maximumSnapshotAge {
+        let unfilteredProcessSnapshot = if let maximumSnapshotAge {
             CmuxTopProcessSnapshot.captureDiscoveryCached(maximumAge: maximumSnapshotAge)
         } else {
             CmuxTopProcessSnapshot.captureDiscovery()
         }
+        let processSnapshot = relevantPanelKeys.map {
+            unfilteredProcessSnapshot.filteringProcessTrees(for: $0)
+        } ?? unfilteredProcessSnapshot
         let registry = CmuxVaultAgentRegistry.load(homeDirectory: homeDirectory, fileManager: fileManager)
         let detectedSnapshots = RestorableAgentSessionIndex.processDetectedSnapshots(
             registry: registry,
@@ -35,7 +45,8 @@ struct ProcessDetectedResumeIndexes: Sendable {
             homeDirectory: homeDirectory,
             fileManager: fileManager,
             registry: registry,
-            detectedSnapshots: detectedSnapshots
+            detectedSnapshots: detectedSnapshots,
+            relevantPanelKeys: relevantPanelKeys
         )
         let detectedBindings = SurfaceResumeBindingIndex.processDetectedTmuxBindings(
             fileManager: fileManager,

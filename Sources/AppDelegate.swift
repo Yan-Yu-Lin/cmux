@@ -4019,6 +4019,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return hasher.finalize()
     }
 
+    private func currentProcessDetectedPanelKeys() -> Set<RestorableAgentSessionIndex.PanelKey> {
+        var panelKeys = Set<RestorableAgentSessionIndex.PanelKey>()
+        for context in mainWindowContexts.values {
+            for workspace in context.tabManager.tabs {
+                for panelID in workspace.panels.keys {
+                    panelKeys.insert(
+                        RestorableAgentSessionIndex.PanelKey(
+                            workspaceId: workspace.id,
+                            panelId: panelID
+                        )
+                    )
+                }
+            }
+        }
+        return panelKeys
+    }
+
     @discardableResult
     private func saveSessionSnapshot(
         includeScrollback: Bool,
@@ -4260,7 +4277,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #if DEBUG
         let loadStart = ProcessInfo.processInfo.systemUptime
 #endif
-        let resumeIndexes = await ProcessDetectedResumeIndexes.load()
+        let resumeIndexes = await ProcessDetectedResumeIndexes.load(
+            relevantPanelKeys: currentProcessDetectedPanelKeys()
+        )
 #if DEBUG
         loadMs = (ProcessInfo.processInfo.systemUptime - loadStart) * 1000.0
         let fingerprintStart = ProcessInfo.processInfo.systemUptime
@@ -4322,7 +4341,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         includeScrollback: Bool,
         removeWhenEmpty: Bool = false
     ) -> Bool {
-        let resumeIndexes = ProcessDetectedResumeIndexes.loadSynchronously()
+        let resumeIndexes = ProcessDetectedResumeIndexes.loadSynchronously(
+            relevantPanelKeys: currentProcessDetectedPanelKeys()
+        )
         return saveSessionSnapshot(
             includeScrollback: includeScrollback,
             removeWhenEmpty: removeWhenEmpty,
@@ -4337,8 +4358,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         preserveManualRestoreBackupOnMissingPrimary: Bool = false
     ) {
         let generation = nextProcessDetectedSessionSaveGeneration()
+        let relevantPanelKeys = currentProcessDetectedPanelKeys()
         Task { @MainActor [weak self] in
-            let resumeIndexes = await ProcessDetectedResumeIndexes.load()
+            let resumeIndexes = await ProcessDetectedResumeIndexes.load(
+                relevantPanelKeys: relevantPanelKeys
+            )
             guard let self,
                   !self.isTerminatingApp,
                   self.isCurrentProcessDetectedSessionSaveGeneration(generation) else { return }
