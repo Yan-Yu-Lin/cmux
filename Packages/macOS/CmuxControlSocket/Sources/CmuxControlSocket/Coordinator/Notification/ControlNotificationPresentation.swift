@@ -51,11 +51,23 @@ public struct ControlNotificationPresentation: Sendable, Equatable {
         }
     }
 
+    public struct SwipeAction: Sendable, Equatable {
+        public let id: String
+        public let title: String?
+
+        public init(id: String, title: String? = nil) {
+            self.id = id
+            self.title = title
+        }
+    }
+
     public let notificationID: UUID
     public let delivery: Delivery
     public let iconSymbolName: String?
     public let actions: [Action]
     public let inputs: [Input]
+    public let swipeLeftAction: SwipeAction?
+    public let swipeRightAction: SwipeAction?
     public let appearance: DynamicNotchAppearanceOverrides
     public let responseToken: UUID?
     public let timeout: TimeInterval
@@ -66,6 +78,8 @@ public struct ControlNotificationPresentation: Sendable, Equatable {
         iconSymbolName: String? = nil,
         actions: [Action] = [],
         inputs: [Input] = [],
+        swipeLeftAction: SwipeAction? = nil,
+        swipeRightAction: SwipeAction? = nil,
         appearance: DynamicNotchAppearanceOverrides = DynamicNotchAppearanceOverrides(),
         responseToken: UUID? = nil,
         timeout: TimeInterval = 8
@@ -75,6 +89,8 @@ public struct ControlNotificationPresentation: Sendable, Equatable {
         self.iconSymbolName = iconSymbolName
         self.actions = actions
         self.inputs = inputs
+        self.swipeLeftAction = swipeLeftAction
+        self.swipeRightAction = swipeRightAction
         self.appearance = appearance
         self.responseToken = responseToken
         self.timeout = timeout
@@ -89,10 +105,19 @@ public struct ControlNotificationPresentation: Sendable, Equatable {
             let icon = try Self.parseIcon(parameters)
             let actions = try Self.parseActions(parameters)
             let inputs = try Self.parseInputs(parameters)
+            let swipeActions = try Self.parseSwipeActions(
+                parameters,
+                actions: actions
+            )
             let appearance = try Self.parseAppearance(parameters)
             let responseToken = try Self.parseResponseToken(parameters)
             let timeout = try Self.parseTimeout(parameters)
-            guard (actions.isEmpty && inputs.isEmpty && appearance.isEmpty && responseToken == nil)
+            guard (actions.isEmpty
+                    && inputs.isEmpty
+                    && swipeActions.left == nil
+                    && swipeActions.right == nil
+                    && appearance.isEmpty
+                    && responseToken == nil)
                     || delivery == .dynamicNotch else {
                 return nil
             }
@@ -102,6 +127,8 @@ public struct ControlNotificationPresentation: Sendable, Equatable {
                 iconSymbolName: icon,
                 actions: actions,
                 inputs: inputs,
+                swipeLeftAction: swipeActions.left,
+                swipeRightAction: swipeActions.right,
                 appearance: appearance,
                 responseToken: responseToken,
                 timeout: timeout
@@ -241,6 +268,73 @@ public struct ControlNotificationPresentation: Sendable, Equatable {
             ))
         }
         return inputs
+    }
+
+    private static func parseSwipeActions(
+        _ parameters: [String: JSONValue],
+        actions: [Action]
+    ) throws -> (left: SwipeAction?, right: SwipeAction?) {
+        guard let value = parameters["swipe_actions"] else {
+            return (nil, nil)
+        }
+        guard case .object(let object) = value,
+            Set(object.keys).isSubset(of: ["left", "right"])
+        else {
+            throw ParseError.invalid
+        }
+        let customActionIDs = Set(actions.map(\.id))
+        return (
+            try parseSwipeAction(
+                object["left"],
+                customActionIDs: customActionIDs
+            ),
+            try parseSwipeAction(
+                object["right"],
+                customActionIDs: customActionIDs
+            )
+        )
+    }
+
+    private static func parseSwipeAction(
+        _ value: JSONValue?,
+        customActionIDs: Set<String>
+    ) throws -> SwipeAction? {
+        guard let value else { return nil }
+        if case .null = value { return nil }
+        let rawID: String
+        let rawTitle: String?
+        switch value {
+        case .string(let id):
+            rawID = id
+            rawTitle = nil
+        case .object(let object):
+            guard Set(object.keys).isSubset(of: ["id", "title"]),
+                case .string(let id)? = object["id"]
+            else {
+                throw ParseError.invalid
+            }
+            rawID = id
+            rawTitle = try optionalString(object["title"])
+        default:
+            throw ParseError.invalid
+        }
+
+        let id = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = rawTitle?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let builtInIDs = Set([
+            "dismiss", "hide", "markRead", "mark-read", "open", "none",
+        ])
+        guard id.count <= 64,
+            controlIdentifierIsValid(id),
+            builtInIDs.contains(id) || customActionIDs.contains(id),
+            title?.isEmpty != true,
+            (title?.count ?? 0) <= 80
+        else {
+            throw ParseError.invalid
+        }
+        return SwipeAction(id: id, title: title)
     }
 
     private static func parseResponseToken(

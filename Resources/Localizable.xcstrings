@@ -173577,7 +173577,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Usage: cmux notify [flags]\n\nSend a notification to a workspace/surface.\n\nFlags:\n  --title <text>         Notification title (default: \"Notification\")\n  --subtitle <text>      Notification subtitle\n  --body <text>          Notification body\n  --delivery <mode>      default, system, or notch\n  --icon <sf-symbol>     Dynamic Notch SF Symbol name\n  --action <id=Label>    Add an interactive action (repeatable, max 4)\n  --input <id=Label>     Add a text field (repeatable, max 4)\n  --secure-input <id=Label>   Add a masked text field\n  --style <key=value>    Override one appearance token (repeatable)\n  --spec <json|@file|->  Load a runtime form from JSON, a file, or stdin\n  --print-schema         Print the JSON form schema without connecting to cmux\n  --wait                 Wait and print the action result\n  --timeout <seconds>    Auto-dismiss timeout; 0 persists (default: 8, or 300 with --wait)\n  --workspace <id|ref|index>   Target workspace, except explicit surface UUIDs resolve globally\n  --surface <id|ref|index>     Target surface (refs/indexes use workspace/window context)\n  --window <id|ref|index>      Window context for workspace/surface refs and indexes\n\nExample:\n  cmux notify --title \"Build done\" --body \"All tests passed\"\n  cmux notify --title \"Error\" --subtitle \"test.swift\" --body \"Line 42: syntax error\"\n  cmux notify --surface <uuid> --title \"Build done\"\n  choice=$(cmux notify --delivery notch --title \"Deploy?\" --action deploy=Deploy --action cancel=Cancel --wait)\n  cmux notify --print-schema\n  cmux notify --spec @approval.json --wait --json"
+            "value": "Usage: cmux notify [flags]\n\nSend a notification to a workspace/surface.\n\nFlags:\n  --title <text>         Notification title (default: \"Notification\")\n  --subtitle <text>      Notification subtitle\n  --body <text>          Notification body\n  --delivery <mode>      default, system, or notch\n  --icon <sf-symbol>     Dynamic Notch SF Symbol name\n  --action <id=Label>    Add an interactive action (repeatable, max 4)\n  --input <id=Label>     Add a text field (repeatable, max 4)\n  --secure-input <id=Label>   Add a masked text field\n  --swipe-left <action>  Action for a completed left swipe\n  --swipe-right <action> Action for a completed right swipe\n  --style <key=value>    Override one appearance token (repeatable)\n  --spec <json|@file|->  Load a runtime form from JSON, a file, or stdin\n  --print-schema         Print the JSON form schema without connecting to cmux\n  --wait                 Wait and print the action result\n  --timeout <seconds>    Auto-dismiss timeout; 0 persists (default: 8, or 300 with --wait)\n  --workspace <id|ref|index>   Target workspace, except explicit surface UUIDs resolve globally\n  --surface <id|ref|index>     Target surface (refs/indexes use workspace/window context)\n  --window <id|ref|index>      Window context for workspace/surface refs and indexes\n\nExample:\n  cmux notify --title \"Build done\" --body \"All tests passed\"\n  cmux notify --title \"Error\" --subtitle \"test.swift\" --body \"Line 42: syntax error\"\n  cmux notify --surface <uuid> --title \"Build done\"\n  choice=$(cmux notify --delivery notch --title \"Deploy?\" --action deploy=Deploy --action cancel=Cancel --wait)\n  cmux notify --delivery notch --title \"Build done\" --swipe-left dismiss --swipe-right open\n  cmux notify --print-schema\n  cmux notify --spec @approval.json --wait --json"
           }
         },
         "es": {
@@ -173601,7 +173601,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "使用法: cmux notify [フラグ]\n\nワークスペースまたはサーフェスに通知を送信します。\n\nフラグ:\n  --title <テキスト>         通知タイトル（既定: \"Notification\"）\n  --subtitle <テキスト>      通知サブタイトル\n  --body <テキスト>          通知本文\n  --delivery <モード>        default、system、notch\n  --icon <SF Symbol>         Dynamic Notch の SF Symbol 名\n  --action <id=ラベル>       操作ボタンを追加（最大4個、繰り返し可）\n  --input <id=ラベル>        テキスト入力欄を追加（最大4個、繰り返し可）\n  --secure-input <id=ラベル> マスクされた入力欄を追加\n  --style <key=value>    外観トークンを上書き（繰り返し可）\n  --spec <json|@file|->      JSON、ファイル、標準入力から実行時フォームを読み込み\n  --print-schema             cmux に接続せず JSON フォームスキーマを出力\n  --wait                     操作結果を待って出力\n  --timeout <秒>             自動消去までの秒数。0 は表示を維持（既定: 8、--wait 時は300）\n  --workspace <id|ref|index> 対象ワークスペース（明示的なサーフェス UUID はグローバルに解決）\n  --surface <id|ref|index>   対象サーフェス（ref/index はワークスペース/ウインドウのコンテキストを使用）\n  --window <id|ref|index>    ワークスペース/サーフェスの ref/index 用ウインドウコンテキスト\n\n例:\n  cmux notify --title \"Build done\" --body \"All tests passed\"\n  choice=$(cmux notify --delivery notch --title \"Deploy?\" --action deploy=Deploy --action cancel=Cancel --wait)\n  cmux notify --print-schema\n  cmux notify --spec @approval.json --wait --json"
+            "value": "使用法: cmux notify [フラグ]\n\nワークスペースまたはサーフェスに通知を送信します。\n\nフラグ:\n  --title <テキスト>         通知タイトル（既定: \"Notification\"）\n  --subtitle <テキスト>      通知サブタイトル\n  --body <テキスト>          通知本文\n  --delivery <モード>        default、system、notch\n  --icon <SF Symbol>         Dynamic Notch の SF Symbol 名\n  --action <id=ラベル>       操作ボタンを追加（最大4個、繰り返し可）\n  --input <id=ラベル>        テキスト入力欄を追加（最大4個、繰り返し可）\n  --secure-input <id=ラベル> マスクされた入力欄を追加\n  --swipe-left <操作>        左スワイプ完了時の操作\n  --swipe-right <操作>       右スワイプ完了時の操作\n  --style <key=value>        外観トークンを上書き（繰り返し可）\n  --spec <json|@file|->      JSON、ファイル、標準入力から実行時フォームを読み込み\n  --print-schema             cmux に接続せず JSON フォームスキーマを出力\n  --wait                     操作結果を待って出力\n  --timeout <秒>             自動消去までの秒数。0 は表示を維持（既定: 8、--wait 時は300）\n  --workspace <id|ref|index> 対象ワークスペース（明示的なサーフェス UUID はグローバルに解決）\n  --surface <id|ref|index>   対象サーフェス（ref/index はワークスペース/ウインドウのコンテキストを使用）\n  --window <id|ref|index>    ワークスペース/サーフェスの ref/index 用ウインドウコンテキスト\n\n例:\n  cmux notify --title \"Build done\" --body \"All tests passed\"\n  choice=$(cmux notify --delivery notch --title \"Deploy?\" --action deploy=Deploy --action cancel=Cancel --wait)\n  cmux notify --delivery notch --title \"Build done\" --swipe-left dismiss --swipe-right open\n  cmux notify --print-schema\n  cmux notify --spec @approval.json --wait --json"
           }
         },
         "km": {
@@ -174702,7 +174702,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "--icon, --action, --input, --wait, and --timeout require --delivery notch"
+            "value": "--icon, --action, --input, --swipe-left, --swipe-right, --wait, and --timeout require --delivery notch"
           }
         },
         "es": {
@@ -174726,7 +174726,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "--icon、--action、--input、--wait、--timeout には --delivery notch が必要です"
+            "value": "--icon、--action、--input、--swipe-left、--swipe-right、--wait、--timeout には --delivery notch が必要です"
           }
         },
         "km": {
@@ -262302,6 +262302,40 @@
         }
       }
     },
+    "cli.dynamicNotch.presentation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "表示: %@"
+          }
+        }
+      }
+    },
+    "cli.dynamicNotch.presentationWithSection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation: %@ (%@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "表示: %@（%@）"
+          }
+        }
+      }
+    },
     "cli.dynamicNotch.horizontalPosition": {
       "extractionState": "manual",
       "localizations": {
@@ -262342,13 +262376,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Usage: cmux dynamic-notch <status|enable|disable|toggle|position|center|reset-position> [value] [--display <id|name|key>] [--json]"
+            "value": "Usage: cmux dynamic-notch <status|enable|disable|toggle|show|compact|hide|auto|position|center|reset-position|size|reset-size|swipe|reset-swipe> [arguments] [--display <id|name|key>] [--json]"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "使用法: cmux dynamic-notch <status|enable|disable|toggle|position|center|reset-position> [値] [--display <ID|名前|キー>] [--json]"
+            "value": "使用法: cmux dynamic-notch <status|enable|disable|toggle|show|compact|hide|auto|position|center|reset-position|size|reset-size|swipe|reset-swipe> [引数] [--display <ID|名前|キー>] [--json]"
           }
         }
       }
@@ -262359,13 +262393,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Usage: cmux dynamic-notch <status|enable|disable|toggle|position|center|reset-position> [value] [--display <id|name|key>] [--json]\n\nControl the default interactive Dynamic Notch notification tray.\n\nSubcommands:\n  status                  Print enablement and every display.\n  enable|on               Use Dynamic Notch for default notifications.\n  disable|off             Use macOS Notification Center by default.\n  toggle                  Toggle the default notification delivery.\n  position <0...1>        Set the synthetic notch position.\n  position left|center|right\n                          Set a named synthetic notch position.\n  position <value> --display <id|name|key>\n                          Move one connected display's notch.\n  center [--display <id|name|key>]\n                          Center all displays or one display.\n  reset-position --display <id|name|key>\n                          Restore one display to the global position.\n\nExplicit `cmux notify --delivery notch` calls still show the tray\nwhen its default delivery is disabled."
+            "value": "Usage: cmux dynamic-notch <command> [arguments] [--display <id|name|key>] [--json]\n\nControl the default interactive Dynamic Notch notification tray.\n\nSubcommands:\n  status                  Print enablement and every display.\n  enable|on               Use Dynamic Notch for default notifications.\n  disable|off             Use macOS Notification Center by default.\n  toggle                  Toggle the default notification delivery.\n  show [feed|unread] [--display <id|name|key>]\n                          Expand and pin a tray section.\n  compact [--display <id|name|key>]\n                          Show and pin the compact pill.\n  hide [--display <id|name|key>]\n                          Retract the tray.\n  auto [--display <id|name|key>]\n                          Restore pointer-driven presentation.\n  position <0...1>        Set the synthetic notch position.\n  position left|center|right\n                          Set a named synthetic notch position.\n  position <value> --display <id|name|key>\n                          Move one connected display's notch.\n  center [--display <id|name|key>]\n                          Center all displays or one display.\n  reset-position --display <id|name|key>\n                          Restore one display to the global position.\n  size <width> <height> [--display <id|name|key>]\n                          Set the global or per-display expanded viewport.\n  reset-size [--display <id|name|key>]\n                          Restore built-in dimensions globally or remove one override.\n  swipe <notification|feed|unread> <left|right> <none|dismiss|hide|markRead|open>\n                          Assign one directional row action.\n  reset-swipe [notification|feed|unread]\n                          Restore all swipe defaults or one row kind.\n\nExplicit `cmux notify --delivery notch` calls still show the tray\nwhen its default delivery is disabled."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "使用法: cmux dynamic-notch <status|enable|disable|toggle|position|center|reset-position> [値] [--display <ID|名前|キー>] [--json]\n\n既定の操作可能な Dynamic Notch 通知トレイを制御します。\n\nサブコマンド:\n  status                  有効状態とすべてのディスプレイを表示します。\n  enable|on               既定の通知に Dynamic Notch を使用します。\n  disable|off             既定で macOS 通知センターを使用します。\n  toggle                  既定の通知配信を切り替えます。\n  position <0...1>        合成ノッチの位置を設定します。\n  position left|center|right\n                          名前で合成ノッチの位置を設定します。\n  position <値> --display <ID|名前|キー>\n                          接続中のディスプレイ 1 台のノッチを移動します。\n  center [--display <ID|名前|キー>]\n                          すべて、または 1 台のディスプレイを中央に配置します。\n  reset-position --display <ID|名前|キー>\n                          1 台のディスプレイを共通位置に戻します。\n\n既定の配信が無効でも、`cmux notify --delivery notch` を明示すると\nトレイを表示できます。"
+            "value": "使用法: cmux dynamic-notch <コマンド> [引数] [--display <ID|名前|キー>] [--json]\n\n既定の操作可能な Dynamic Notch 通知トレイを制御します。\n\nサブコマンド:\n  status                  有効状態とすべてのディスプレイを表示します。\n  enable|on               既定の通知に Dynamic Notch を使用します。\n  disable|off             既定で macOS 通知センターを使用します。\n  toggle                  既定の通知配信を切り替えます。\n  show [feed|unread] [--display <ID|名前|キー>]\n                          トレイのセクションを展開して固定します。\n  compact [--display <ID|名前|キー>]\n                          コンパクトなピルを表示して固定します。\n  hide [--display <ID|名前|キー>]\n                          トレイを格納します。\n  auto [--display <ID|名前|キー>]\n                          ポインタ連動の表示に戻します。\n  position <0...1>        合成ノッチの位置を設定します。\n  position left|center|right\n                          名前で合成ノッチの位置を設定します。\n  position <値> --display <ID|名前|キー>\n                          接続中のディスプレイ 1 台のノッチを移動します。\n  center [--display <ID|名前|キー>]\n                          すべて、または 1 台のディスプレイを中央に配置します。\n  reset-position --display <ID|名前|キー>\n                          1 台のディスプレイを共通位置に戻します。\n  size <幅> <高さ> [--display <ID|名前|キー>]\n                          全体またはディスプレイ別の展開サイズを設定します。\n  reset-size [--display <ID|名前|キー>]\n                          全体の組み込みサイズを復元するか、個別設定を削除します。\n  swipe <notification|feed|unread> <left|right> <none|dismiss|hide|markRead|open>\n                          行のスワイプ操作を設定します。\n  reset-swipe [notification|feed|unread]\n                          すべて、または 1 種類の行の既定値を復元します。\n\n既定の配信が無効でも、`cmux notify --delivery notch` を明示すると\nトレイを表示できます。"
           }
         }
       }
@@ -262410,13 +262444,438 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "  %@ (%@): %.2f [%@]"
+            "value": "  %@ (%@): %.2f, %.0f × %.0f [%@]"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "  %@ (%@): %.2f [%@]"
+            "value": "  %@ (%@): %.2f、%.0f × %.0f [%@]"
+          }
+        }
+      }
+    },
+    "cli.dynamicNotch.expandedSize": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default expanded size: %.0f × %.0f"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "既定の展開サイズ: %.0f × %.0f"
+          }
+        }
+      }
+    },
+    "cli.dynamicNotch.error.invalidSize": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Notch size must use a width from 300 to 1200 and height from 160 to 1400."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Notch のサイズは、幅 300 から 1200、高さ 160 から 1400 の範囲で指定してください。"
+          }
+        }
+      }
+    },
+    "cli.dynamicNotch.swipeActions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swipe actions:"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スワイプ操作:"
+          }
+        }
+      }
+    },
+    "cli.dynamicNotch.swipeAction": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %@: left=%@ right=%@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %@: 左=%@ 右=%@"
+          }
+        }
+      }
+    },
+    "cli.notify.error.invalidSwipeAction": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid swipe action; use a built-in action, an --action id, or id=Label"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スワイプ操作が無効です。組み込み操作、--action の id、または id=ラベルを使用してください"
+          }
+        }
+      }
+    },
+    "common.none": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "なし"
+          }
+        }
+      }
+    },
+    "notification.dynamicNotch.feed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feed"
+          }
+        }
+      }
+    },
+    "notification.dynamicNotch.feed.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No pending Feed actions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留中の Feed 操作はありません"
+          }
+        }
+      }
+    },
+    "notification.dynamicNotch.hideFromIsland": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide from Island"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アイランドから隠す"
+          }
+        }
+      }
+    },
+    "notification.dynamicNotch.resize.accessibility": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resize Dynamic Notch"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Notch のサイズを変更"
+          }
+        }
+      }
+    },
+    "notification.dynamicNotch.unread": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unread"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未読"
+          }
+        }
+      }
+    },
+    "notification.dynamicNotch.unread.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No unread notifications"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未読通知はありません"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.direction.left": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swipe Left"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "左にスワイプ"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.direction.right": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swipe Right"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "右にスワイプ"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.feed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feed"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.feed.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pending agent approvals, plans, and questions from cmux Feed."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "cmux Feed の保留中のエージェント承認、計画、質問。"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.notification": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.notification.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runtime notifications created by cmux notify or terminal activity."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "cmux notify またはターミナル操作で作成された実行時通知。"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose what a completed left or right swipe does for each kind of row."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "行の種類ごとに左右のスワイプ完了時の操作を選択します。"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Notch Swipe Actions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Notch のスワイプ操作"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.unread": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unread"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未読"
+          }
+        }
+      }
+    },
+    "settings.notifications.dynamicNotch.swipe.unread.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unread terminal notifications."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未読のターミナル通知。"
+          }
+        }
+      }
+    },
+    "socket.notification.dynamicNotch.expandedSizeInvalid": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "expanded_width must be 300...1200 and expanded_height must be 160...1400"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "expanded_width は 300...1200、expanded_height は 160...1400 の範囲で指定してください"
+          }
+        }
+      }
+    },
+    "socket.notification.dynamicNotch.swipeConfigurationInvalid": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "swipe row, direction, and action must form a valid configuration"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スワイプの行、方向、操作を有効な組み合わせで指定してください"
+          }
+        }
+      }
+    },
+    "socket.notification.dynamicNotch.presentationInvalid": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "phase must be auto, retracted, compact, or expanded; section must be feed or unread"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "phase は auto、retracted、compact、expanded のいずれか、section は feed または unread を指定してください"
           }
         }
       }

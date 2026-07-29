@@ -442,6 +442,8 @@ extension CmuxSettingsFileStore {
         "notifications.delivery",
         "notifications.dynamicNotch",
         "notifications.dynamicNotchDisplayPositions",
+        "notifications.dynamicNotchDisplaySizes",
+        "notifications.dynamicNotchSwipeActions",
         "notifications.dockBadge",
         "notifications.showInMenuBar",
         "notifications.unreadPaneRing",

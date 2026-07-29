@@ -532,6 +532,39 @@ final class CmuxSettingsFileStore {
                 )
             }
         }
+        if let rawSizes = section["dynamicNotchDisplaySizes"] {
+            if let serialized =
+                DynamicNotchDisplaySizeSettings.serializedSizes(
+                    fromJSONObject: rawSizes
+                ) {
+                snapshot.managedUserDefaults[
+                    NotificationsCatalogSection()
+                        .dynamicNotchDisplaySizes.userDefaultsKey
+                ] = .stringDictionary(serialized)
+            } else {
+                logInvalid(
+                    "notifications.dynamicNotchDisplaySizes",
+                    sourcePath: sourcePath
+                )
+            }
+        }
+        if let rawSwipeActions = section["dynamicNotchSwipeActions"] {
+            if let actions = DynamicNotchSwipeActions.decodeFromJSON(
+                rawSwipeActions
+            ),
+               let serialized =
+                actions.encodeForUserDefaults() as? [String: String] {
+                snapshot.managedUserDefaults[
+                    NotificationsCatalogSection()
+                        .dynamicNotchSwipeActions.userDefaultsKey
+                ] = .stringDictionary(serialized)
+            } else {
+                logInvalid(
+                    "notifications.dynamicNotchSwipeActions",
+                    sourcePath: sourcePath
+                )
+            }
+        }
         if let raw = jsonString(section["sound"]) {
             let allowed = Set(NotificationSoundSettings.systemSounds.map(\.value))
             guard allowed.contains(raw) else {

@@ -37,6 +37,8 @@ extension ControlCommandCoordinator {
             return dynamicNotchSettings()
         case "notification.dynamic_notch.configure":
             return dynamicNotchConfigure(request.params)
+        case "notification.dynamic_notch.present":
+            return dynamicNotchPresent(request.params)
         default:
             return nil
         }
@@ -415,7 +417,13 @@ extension ControlCommandCoordinator {
             dynamicNotchDisplayConfigurationInvalid:
                 "display_key requires horizontal_position or reset_display_position",
             dynamicNotchConfigurationRequired:
-                "enabled, horizontal_position, or reset_display_position is required"
+                "enabled, horizontal_position, or reset_display_position is required",
+            dynamicNotchExpandedSizeInvalid:
+                "expanded_width must be 300...1200 and expanded_height must be 160...1400",
+            dynamicNotchSwipeConfigurationInvalid:
+                "swipe row, direction, and action must form a valid configuration",
+            dynamicNotchPresentationInvalid:
+                "phase must be auto, retracted, compact, or expanded; section must be feed or unread"
         )
     }
 
@@ -544,11 +552,128 @@ extension ControlCommandCoordinator {
             resetDisplayPosition = false
         }
 
+        func optionalNumber(_ key: String) -> Double? {
+            switch params[key] {
+            case .int(let value)?:
+                return Double(value)
+            case .double(let value)?:
+                return value
+            default:
+                return nil
+            }
+        }
+        let expandedWidth = optionalNumber("expanded_width")
+        let expandedHeight = optionalNumber("expanded_height")
+        if (params["expanded_width"] != nil && expandedWidth == nil)
+            || (params["expanded_height"] != nil && expandedHeight == nil)
+            || (expandedWidth.map {
+                !$0.isFinite || !(300 ... 1_200).contains($0)
+            } == true)
+            || (expandedHeight.map {
+                !$0.isFinite || !(160 ... 1_400).contains($0)
+            } == true) {
+            return .err(
+                code: "invalid_params",
+                message:
+                    notificationStrings.dynamicNotchExpandedSizeInvalid,
+                data: nil
+            )
+        }
+
+        let resetDisplaySize: Bool
+        if let raw = params["reset_display_size"] {
+            guard case .bool(let value) = raw else {
+                return .err(
+                    code: "invalid_params",
+                    message:
+                        notificationStrings.dynamicNotchResetMustBeBoolean,
+                    data: nil
+                )
+            }
+            resetDisplaySize = value
+        } else {
+            resetDisplaySize = false
+        }
+
+        func optionalString(_ key: String) -> String? {
+            guard case .string(let value)? = params[key] else {
+                return nil
+            }
+            return value
+        }
+        let swipeRowKind = optionalString("swipe_row_kind")
+        let swipeDirection = optionalString("swipe_direction")
+        let swipeAction = optionalString("swipe_action")
+        if params["swipe_row_kind"] != nil && swipeRowKind == nil
+            || params["swipe_direction"] != nil && swipeDirection == nil
+            || params["swipe_action"] != nil && swipeAction == nil {
+            return .err(
+                code: "invalid_params",
+                message: notificationStrings
+                    .dynamicNotchSwipeConfigurationInvalid,
+                data: nil
+            )
+        }
+        let resetSwipeActions: Bool
+        if let raw = params["reset_swipe_actions"] {
+            guard case .bool(let value) = raw else {
+                return .err(
+                    code: "invalid_params",
+                    message:
+                        notificationStrings.dynamicNotchResetMustBeBoolean,
+                    data: nil
+                )
+            }
+            resetSwipeActions = value
+        } else {
+            resetSwipeActions = false
+        }
+        let validSwipeRows = Set(["notification", "feed", "unread"])
+        let validSwipeDirections = Set(["left", "right"])
+        let validSwipeActions = Set([
+            "none", "dismiss", "hide", "markRead", "open",
+        ])
+        let hasSwipeMutation = swipeRowKind != nil
+            || swipeDirection != nil
+            || swipeAction != nil
+            || resetSwipeActions
+        let validSwipeMutation =
+            !hasSwipeMutation
+            || resetSwipeActions
+                && swipeDirection == nil
+                && swipeAction == nil
+                && (
+                    swipeRowKind == nil
+                        || swipeRowKind.map(validSwipeRows.contains) == true
+                )
+            || !resetSwipeActions
+                && swipeRowKind.map(validSwipeRows.contains) == true
+                && swipeDirection.map(validSwipeDirections.contains) == true
+                && swipeAction.map(validSwipeActions.contains) == true
+        guard validSwipeMutation else {
+            return .err(
+                code: "invalid_params",
+                message: notificationStrings
+                    .dynamicNotchSwipeConfigurationInvalid,
+                data: nil
+            )
+        }
+
+        let hasSizeMutation =
+            expandedWidth != nil || expandedHeight != nil || resetDisplaySize
         guard !(resetDisplayPosition && horizontalPosition != nil),
               !resetDisplayPosition || displayKey != nil,
+              !(resetDisplaySize
+                && (expandedWidth != nil || expandedHeight != nil)),
+              !resetDisplaySize || displayKey != nil,
+              displayKey == nil
+                || !hasSizeMutation
+                || (expandedWidth != nil && expandedHeight != nil)
+                || resetDisplaySize,
               displayKey == nil
                 || horizontalPosition != nil
-                || resetDisplayPosition else {
+                || resetDisplayPosition
+                || hasSizeMutation else {
             return .err(
                 code: "invalid_params",
                 message: notificationStrings
@@ -559,7 +684,9 @@ extension ControlCommandCoordinator {
 
         guard enabled != nil
                 || horizontalPosition != nil
-                || resetDisplayPosition else {
+                || resetDisplayPosition
+                || hasSizeMutation
+                || hasSwipeMutation else {
             return .err(
                 code: "invalid_params",
                 message:
@@ -571,7 +698,14 @@ extension ControlCommandCoordinator {
             enabled: enabled,
             horizontalPosition: horizontalPosition,
             displayKey: displayKey,
-            resetDisplayPosition: resetDisplayPosition
+            resetDisplayPosition: resetDisplayPosition,
+            expandedWidth: expandedWidth,
+            expandedHeight: expandedHeight,
+            resetDisplaySize: resetDisplaySize,
+            swipeRowKind: swipeRowKind,
+            swipeDirection: swipeDirection,
+            swipeAction: swipeAction,
+            resetSwipeActions: resetSwipeActions
         ) else {
             return .err(
                 code: "unavailable",
@@ -580,6 +714,84 @@ extension ControlCommandCoordinator {
             )
         }
         return .ok(dynamicNotchSettingsPayload(snapshot))
+    }
+
+    func dynamicNotchPresent(
+        _ params: [String: JSONValue]
+    ) -> ControlCallResult {
+        guard case .string(let phase)? = params["phase"],
+              ["auto", "retracted", "compact", "expanded"].contains(
+                  phase
+              ) else {
+            return .err(
+                code: "invalid_params",
+                message: notificationStrings
+                    .dynamicNotchPresentationInvalid,
+                data: nil
+            )
+        }
+
+        let section: String?
+        if let rawSection = params["section"] {
+            guard case .string(let value) = rawSection,
+                  ["feed", "unread"].contains(value) else {
+                return .err(
+                    code: "invalid_params",
+                    message: notificationStrings
+                        .dynamicNotchPresentationInvalid,
+                    data: nil
+                )
+            }
+            section = value
+        } else {
+            section = nil
+        }
+
+        let displayKey: String?
+        if let rawDisplayKey = params["display_key"] {
+            guard case .string(let value) = rawDisplayKey,
+                  !value.trimmingCharacters(
+                      in: .whitespacesAndNewlines
+                  ).isEmpty else {
+                return .err(
+                    code: "invalid_params",
+                    message: notificationStrings
+                        .dynamicNotchDisplayKeyInvalid,
+                    data: nil
+                )
+            }
+            displayKey = value
+        } else {
+            displayKey = nil
+        }
+
+        guard context?.controlDynamicNotchPresent(
+            phase: phase,
+            section: section,
+            displayKey: displayKey
+        ) == true,
+            let snapshot = context?.controlDynamicNotchSettings()
+        else {
+            return .err(
+                code: "unavailable",
+                message: notificationStrings.dynamicNotchUnavailable,
+                data: nil
+            )
+        }
+
+        guard case .object(var payload) =
+            dynamicNotchSettingsPayload(snapshot) else {
+            return .err(
+                code: "unavailable",
+                message: notificationStrings.dynamicNotchUnavailable,
+                data: nil
+            )
+        }
+        payload["phase"] = .string(phase)
+        payload["section"] = section.map(JSONValue.string) ?? .null
+        payload["display_key"] =
+            displayKey.map(JSONValue.string) ?? .null
+        return .ok(.object(payload))
     }
 
     private func dynamicNotchSettingsPayload(
@@ -592,6 +804,22 @@ extension ControlCommandCoordinator {
             ),
             "horizontal_position": .double(
                 snapshot.horizontalPosition
+            ),
+            "expanded_width": .double(snapshot.expandedWidth),
+            "expanded_height": .double(snapshot.expandedHeight),
+            "swipe_actions": .object(
+                Dictionary(
+                    uniqueKeysWithValues: snapshot.swipeActions.map {
+                        swipe in
+                        (
+                            swipe.rowKind,
+                            .object([
+                                "left": .string(swipe.left),
+                                "right": .string(swipe.right),
+                            ])
+                        )
+                    }
+                )
             ),
             "displays": .array(snapshot.displays.map { display in
                 .object([
@@ -608,6 +836,15 @@ extension ControlCommandCoordinator {
                     ),
                     "has_position_override": .bool(
                         display.hasPositionOverride
+                    ),
+                    "expanded_width": .double(
+                        display.expandedWidth
+                    ),
+                    "expanded_height": .double(
+                        display.expandedHeight
+                    ),
+                    "has_size_override": .bool(
+                        display.hasSizeOverride
                     ),
                 ])
             }),
