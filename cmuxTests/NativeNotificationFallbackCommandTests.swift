@@ -248,6 +248,43 @@ struct NativeNotificationFallbackCommandTests {
     }
 
     @Test
+    func markReadDoesNotDismissExplicitDynamicNotchNotification() {
+        let store = TerminalNotificationStore.shared
+        let originalAppFocusOverride = AppFocusState.overrideIsFocused
+        resetState(originalAppFocusOverride: false)
+        defer {
+            resetState(
+                originalAppFocusOverride: originalAppFocusOverride
+            )
+        }
+
+        let notification = TerminalNotification(
+            id: UUID(),
+            tabId: UUID(),
+            surfaceId: UUID(),
+            title: "Approval",
+            subtitle: "",
+            body: "Keep the pending action visible",
+            createdAt: Date(),
+            isRead: false,
+            presentation: TerminalNotificationPresentation(
+                delivery: .dynamicNotch
+            )
+        )
+        store.replaceNotificationsForTesting([notification])
+        var dismissedIDs = Set<UUID>()
+        store.configureDynamicNotchDelivery { mutation in
+            guard case .dismiss(let identifiers) = mutation else { return }
+            dismissedIDs.formUnion(identifiers)
+        }
+
+        store.markRead(id: notification.id)
+
+        #expect(store.notifications.first?.isRead == true)
+        #expect(!dismissedIDs.contains(notification.id))
+    }
+
+    @Test
     func explicitSystemDeliveryOverridesDynamicNotchPreference() {
         let store = TerminalNotificationStore.shared
         let defaults = UserDefaults.standard
