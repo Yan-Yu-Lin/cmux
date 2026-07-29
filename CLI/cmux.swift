@@ -246,6 +246,14 @@ struct ClaudeHookSessionStoreFile: Codable {
     }
 }
 
+struct CodexTeamsThreadStoreRecord {
+    let sessionId: String
+    let parentThreadId: String?
+    let workspaceId: String
+    let surfaceId: String
+    let cwd: String?
+}
+
 final class ClaudeHookSessionStore {
     private static let defaultStatePath = "~/.cmuxterm/claude-hook-sessions.json"
     private static let maxStateAgeSeconds: TimeInterval = 60 * 60 * 24 * 7
@@ -774,46 +782,61 @@ final class ClaudeHookSessionStore {
         surfaceId: String,
         cwd: String?
     ) throws {
-        let normalized = normalizeSessionId(sessionId)
-        guard !normalized.isEmpty else { return }
+        try upsertCodexTeamsThreads([
+            CodexTeamsThreadStoreRecord(
+                sessionId: sessionId,
+                parentThreadId: parentThreadId,
+                workspaceId: workspaceId,
+                surfaceId: surfaceId,
+                cwd: cwd
+            ),
+        ])
+    }
+
+    func upsertCodexTeamsThreads(_ threads: [CodexTeamsThreadStoreRecord]) throws {
+        guard !threads.isEmpty else { return }
         try withLockedState { state in
             let now = Date().timeIntervalSince1970
-            var record = makeSessionRecord(
-                state: state,
-                sessionId: normalized,
-                workspaceId: workspaceId,
-                surfaceId: surfaceId,
-                now: now
-            )
-            update(
-                &record,
-                workspaceId: workspaceId,
-                surfaceId: surfaceId,
-                cwd: cwd,
-                transcriptPath: nil,
-                pid: nil,
-                launchCommand: nil,
-                isRestorable: nil,
-                agentLifecycle: nil,
-                lastSubtitle: nil,
-                lastBody: nil,
-                lastNotificationStatus: nil,
-                updateLastNotificationStatus: false,
-                runtimeStatus: nil,
-                updateRuntimeStatus: false,
-                now: now
-            )
-            record.runId = normalized
-            if let normalizedParent = normalizeOptional(parentThreadId) {
-                record.parentRunId = normalizedParent
-                record.parentSessionId = normalizedParent
-                record.relationship = "spawned"
-            } else {
-                record.parentRunId = nil
-                record.parentSessionId = nil
-                record.relationship = nil
+            for thread in threads {
+                let normalized = normalizeSessionId(thread.sessionId)
+                guard !normalized.isEmpty else { continue }
+                var record = makeSessionRecord(
+                    state: state,
+                    sessionId: normalized,
+                    workspaceId: thread.workspaceId,
+                    surfaceId: thread.surfaceId,
+                    now: now
+                )
+                update(
+                    &record,
+                    workspaceId: thread.workspaceId,
+                    surfaceId: thread.surfaceId,
+                    cwd: thread.cwd,
+                    transcriptPath: nil,
+                    pid: nil,
+                    launchCommand: nil,
+                    isRestorable: nil,
+                    agentLifecycle: nil,
+                    lastSubtitle: nil,
+                    lastBody: nil,
+                    lastNotificationStatus: nil,
+                    updateLastNotificationStatus: false,
+                    runtimeStatus: nil,
+                    updateRuntimeStatus: false,
+                    now: now
+                )
+                record.runId = normalized
+                if let normalizedParent = normalizeOptional(thread.parentThreadId) {
+                    record.parentRunId = normalizedParent
+                    record.parentSessionId = normalizedParent
+                    record.relationship = "spawned"
+                } else {
+                    record.parentRunId = nil
+                    record.parentSessionId = nil
+                    record.relationship = nil
+                }
+                state.sessions[normalized] = record
             }
-            state.sessions[normalized] = record
         }
     }
 
@@ -20914,6 +20937,7 @@ struct CMUXCLI {
         private var attachableThreadIds = Set<String>()
         private let readinessLock = NSLock()
         private let stateLock = NSLock()
+        private let persistenceLock = NSLock()
         private var lastAgentSurfaceId: String?
         private var subscribedThreadIds = Set<String>()
         private var approvalItemById: [String: [String: Any]] = [:]
@@ -20922,6 +20946,7 @@ struct CMUXCLI {
         private var suppressedApprovalOrder: [String] = []
         private var reconciliationCursor: String?
         private var reconciliationSeenCursors = Set<String>()
+        private var pendingPersistenceByThreadId: [String: CodexTeamsThreadStoreRecord]?
 
         init(
             appServerURL: String,
@@ -21022,6 +21047,13 @@ struct CMUXCLI {
                 }
             )
             let threadIds = loaded["data"] as? [String] ?? []
+            beginThreadPersistenceBatch()
+            var persistenceBatchFinished = false
+            defer {
+                if !persistenceBatchFinished {
+                    cancelThreadPersistenceBatch()
+                }
+            }
             for threadId in threadIds {
                 do {
                     try subscribeToThreadIfNeeded(threadId, connection: connection)
@@ -21029,6 +21061,8 @@ struct CMUXCLI {
                     cliWriteStderr("cmux codex-teams watcher skipped thread \(threadId): \(error)\n")
                 }
             }
+            try flushThreadPersistenceBatch()
+            persistenceBatchFinished = true
             guard let rawNextCursor = loaded["nextCursor"] as? String else { return nil }
             let nextCursor = rawNextCursor.trimmingCharacters(in: .whitespacesAndNewlines)
             return nextCursor.isEmpty ? nil : nextCursor
@@ -21293,7 +21327,7 @@ struct CMUXCLI {
             } else {
                 thread = incomingThread
             }
-            persistThread(
+            try persistThread(
                 thread,
                 surfaceId: thread.spawn == nil ? rootSurfaceId : ""
             )
@@ -21319,15 +21353,51 @@ struct CMUXCLI {
             try drainPendingChildren(parentThreadId: thread.id)
         }
 
-        private func persistThread(_ thread: CodexTeamsThread, surfaceId: String) {
+        private func persistThread(_ thread: CodexTeamsThread, surfaceId: String) throws {
+            let record = CodexTeamsThreadStoreRecord(
+                sessionId: thread.id,
+                parentThreadId: thread.spawn?.parentThreadId,
+                workspaceId: workspaceId,
+                surfaceId: surfaceId,
+                cwd: thread.cwd
+            )
+            persistenceLock.lock()
+            if pendingPersistenceByThreadId != nil {
+                pendingPersistenceByThreadId?[thread.id] = record
+                persistenceLock.unlock()
+                return
+            }
+            persistenceLock.unlock()
+            try persistThreadRecords([record])
+        }
+
+        private func beginThreadPersistenceBatch() {
+            persistenceLock.lock()
+            precondition(pendingPersistenceByThreadId == nil)
+            pendingPersistenceByThreadId = [:]
+            persistenceLock.unlock()
+        }
+
+        private func cancelThreadPersistenceBatch() {
+            persistenceLock.lock()
+            pendingPersistenceByThreadId = nil
+            persistenceLock.unlock()
+        }
+
+        private func flushThreadPersistenceBatch() throws {
+            persistenceLock.lock()
+            let records = pendingPersistenceByThreadId?
+                .values
+                .sorted { $0.sessionId < $1.sessionId } ?? []
+            pendingPersistenceByThreadId = nil
+            persistenceLock.unlock()
+            try persistThreadRecords(records)
+        }
+
+        private func persistThreadRecords(_ records: [CodexTeamsThreadStoreRecord]) throws {
+            guard !records.isEmpty else { return }
             do {
-                try sessionStore.upsertCodexTeamsThread(
-                    sessionId: thread.id,
-                    parentThreadId: thread.spawn?.parentThreadId,
-                    workspaceId: workspaceId,
-                    surfaceId: surfaceId,
-                    cwd: thread.cwd
-                )
+                try sessionStore.upsertCodexTeamsThreads(records)
             } catch {
                 let format = CMUXCLILocalization.string(
                     "agentSession.codex.warning.persistThreadFailed",
@@ -21336,9 +21406,10 @@ struct CMUXCLI {
                 let warning = String(
                     format: format,
                     locale: Locale.current,
-                    arguments: [thread.id, String(describing: error)]
+                    arguments: [records[0].sessionId, String(describing: error)]
                 )
                 cliWriteStderr("\(warning)\n")
+                throw error
             }
         }
 
@@ -21505,7 +21576,7 @@ struct CMUXCLI {
                 throw CLIError(message: "surface.split did not return surface_id")
             }
             lastAgentSurfaceId = surfaceId
-            persistThread(thread, surfaceId: surfaceId)
+            try persistThread(thread, surfaceId: surfaceId)
 
             do {
                 _ = try socketClient.sendV2(method: "tab.action", params: [

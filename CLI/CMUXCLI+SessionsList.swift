@@ -26,7 +26,8 @@ extension CMUXCLI {
         processEnv: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
         outputSchemaVersion: Int? = nil,
-        instanceScope: CMUXAgentInstanceScope? = nil
+        instanceScope: CMUXAgentInstanceScope? = nil,
+        includeCodexTranscriptDiagnostics: Bool = true
     ) throws {
         var args = rawArgs
         let subcommand = args.first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -53,6 +54,7 @@ extension CMUXCLI {
 
         var includeAll = false
         var localJSONOutput = jsonOutput
+        var inspectCodexTranscripts = includeCodexTranscriptDiagnostics
         var remaining: [String] = []
         for arg in rem7 {
             switch arg {
@@ -60,6 +62,8 @@ extension CMUXCLI {
                 includeAll = true
             case "--json":
                 localJSONOutput = true
+            case "--transcripts":
+                inspectCodexTranscripts = true
             default:
                 remaining.append(arg)
             }
@@ -231,21 +235,31 @@ extension CMUXCLI {
                     let codexHome = sessionsListExpandedPath(
                         sessionsListNormalized(record.launchCommand?.environment?["CODEX_HOME"]) ?? defaultCodexHome
                     )
-                    let index = try codexIndexes[codexHome] ?? buildCodexDebugIndex(
-                        codexHome: codexHome,
-                        fileManager: fileManager
-                    )
-                    codexIndexes[codexHome] = index
-                    let transcriptPath = index.transcriptPathBySessionId[record.sessionId]
                     let savedTranscriptPath = sessionsListNormalized(record.transcriptPath)
                     let expandedSavedTranscriptPath = savedTranscriptPath.map { sessionsListExpandedPath($0) }
                     payload["session_home"] = codexHome
                     payload["session_dir"] = URL(fileURLWithPath: codexHome, isDirectory: true)
                         .appendingPathComponent("sessions", isDirectory: true)
                         .path
-                    payload["codex_indexed"] = index.indexedSessionIds.contains(record.sessionId)
-                    payload["codex_transcript_found"] = transcriptPath != nil || expandedSavedTranscriptPath.map { fileManager.fileExists(atPath: $0) } == true
-                    payload["codex_transcript_path"] = transcriptPath ?? expandedSavedTranscriptPath ?? NSNull()
+                    payload["codex_transcript_scan_performed"] = inspectCodexTranscripts
+                    if inspectCodexTranscripts {
+                        let index = try codexIndexes[codexHome] ?? buildCodexDebugIndex(
+                            codexHome: codexHome,
+                            fileManager: fileManager
+                        )
+                        codexIndexes[codexHome] = index
+                        let transcriptPath = index.transcriptPathBySessionId[record.sessionId]
+                        payload["codex_indexed"] = index.indexedSessionIds.contains(record.sessionId)
+                        payload["codex_transcript_found"] = transcriptPath != nil
+                            || expandedSavedTranscriptPath.map { fileManager.fileExists(atPath: $0) } == true
+                        payload["codex_transcript_path"] = transcriptPath ?? expandedSavedTranscriptPath ?? NSNull()
+                    } else {
+                        payload["codex_indexed"] = NSNull()
+                        payload["codex_transcript_found"] = expandedSavedTranscriptPath.map {
+                            fileManager.fileExists(atPath: $0)
+                        } ?? false
+                        payload["codex_transcript_path"] = expandedSavedTranscriptPath ?? NSNull()
+                    }
                 } else if let envKey = spec.configDirEnvOverride,
                           let value = sessionsListNormalized(record.launchCommand?.environment?[envKey]) {
                     payload["session_home"] = sessionsListExpandedPath(value)
@@ -254,24 +268,40 @@ extension CMUXCLI {
                     payload["session_home"] = NSNull()
                     payload["session_dir"] = NSNull()
                 }
-                let transcriptBacked = try sessionsListTranscriptBacked(
+                let nativeThreadBacked = sessionsListNativeThreadBacked(
                     agent: spec.name,
-                    record: record,
-                    defaultCodexHome: defaultCodexHome,
-                    codexIndexes: &codexIndexes,
-                    fileManager: fileManager
+                    record: record
                 )
+                let transcriptBacked = inspectCodexTranscripts
+                    ? try sessionsListTranscriptBacked(
+                        agent: spec.name,
+                        record: record,
+                        defaultCodexHome: defaultCodexHome,
+                        codexIndexes: &codexIndexes,
+                        fileManager: fileManager
+                    )
+                    : sessionsListSavedTranscriptBacked(record: record, fileManager: fileManager)
+                payload["native_thread_backed"] = nativeThreadBacked
                 payload["transcript_backed"] = transcriptBacked
                 let launchBacked = record.launchCommand != nil && agentHookSessionHasDurableResumeEvidence(
                     kind: spec.name,
                     launchCommand: record.launchCommand
                 )
                 payload["launch_backed"] = launchBacked
+                payload["evidence_sources"] = sessionsListEvidenceSources(
+                    nativeThreadBacked: nativeThreadBacked,
+                    activeForWorkspace: activeForWorkspace,
+                    activeForSurface: activeForSurface,
+                    restoreBacked: record.restoreAuthority == true || record.isRestorable == true,
+                    launchBacked: launchBacked,
+                    transcriptBacked: transcriptBacked
+                )
 
                 let defaultVisible = sessionsListDefaultVisible(
                     activeForWorkspace: activeForWorkspace,
                     activeForSurface: activeForSurface,
                     record: record,
+                    nativeThreadBacked: nativeThreadBacked,
                     launchBacked: launchBacked,
                     transcriptBacked: transcriptBacked
                 )
@@ -351,7 +381,8 @@ extension CMUXCLI {
                 processEnv: processEnv,
                 fileManager: fileManager,
                 outputSchemaVersion: 2,
-                instanceScope: instanceScope
+                instanceScope: instanceScope,
+                includeCodexTranscriptDiagnostics: false
             )
         case "tree":
             try runAgentsTreeCommand(
@@ -368,7 +399,8 @@ extension CMUXCLI {
                 processEnv: processEnv,
                 fileManager: fileManager,
                 outputSchemaVersion: 2,
-                instanceScope: instanceScope
+                instanceScope: instanceScope,
+                includeCodexTranscriptDiagnostics: false
             )
         case let subcommand?:
             throw CLIError(message: String(
@@ -488,13 +520,6 @@ extension CMUXCLI {
         let surfaceFilter = sessionsListNormalizedIDRef(surfaceRaw)?.lowercased()
         let hasRecordFilter = sessionFilter != nil || workspaceFilter != nil || surfaceFilter != nil
         let decoder = JSONDecoder()
-        let defaultCodexHome = sessionsListExpandedPath(
-            processEnv["CODEX_HOME"]
-                ?? URL(fileURLWithPath: processEnv["HOME"] ?? NSHomeDirectory(), isDirectory: true)
-                    .appendingPathComponent(".codex", isDirectory: true)
-                    .path
-        )
-        var codexIndexes: [String: CodexSessionListIndex] = [:]
         let claudeTranscriptLookup = SessionsListClaudeTranscriptLookupCache(
             homeDirectory: sessionsListExpandedPath(processEnv["HOME"] ?? NSHomeDirectory())
         )
@@ -531,22 +556,19 @@ extension CMUXCLI {
                 let activeForSurface = surfaceActiveSessionID == rawRecord.sessionId
                     || surfaceActiveSessionID == record.sessionId
                 let restoreAuthority = record.restoreAuthority ?? record.isRestorable ?? false
-                let needsDefaultVisibilityEvidence = !includeAll && !hasRecordFilter
-                let launchBacked = needsDefaultVisibilityEvidence
-                    && record.launchCommand != nil
+                let nativeThreadBacked = sessionsListNativeThreadBacked(
+                    agent: spec.name,
+                    record: record
+                )
+                let launchBacked = record.launchCommand != nil
                     && agentHookSessionHasDurableResumeEvidence(
                         kind: spec.name,
                         launchCommand: record.launchCommand
                     )
-                let transcriptBacked = needsDefaultVisibilityEvidence
-                    ? try sessionsListTranscriptBacked(
-                        agent: spec.name,
-                        record: record,
-                        defaultCodexHome: defaultCodexHome,
-                        codexIndexes: &codexIndexes,
-                        fileManager: fileManager
-                    )
-                    : false
+                let transcriptBacked = sessionsListSavedTranscriptBacked(
+                    record: record,
+                    fileManager: fileManager
+                )
                 let runID = sessionsListNormalized(record.runId) ?? record.sessionId
                 let parentRunID = sessionsListNormalized(record.parentRunId)
                 let parentSessionID = sessionsListNormalized(record.parentSessionId)
@@ -569,6 +591,15 @@ extension CMUXCLI {
                     "workspace_id": record.workspaceId,
                     "surface_id": record.surfaceId,
                     "restore_authority": restoreAuthority,
+                    "native_thread_backed": nativeThreadBacked,
+                    "evidence_sources": sessionsListEvidenceSources(
+                        nativeThreadBacked: nativeThreadBacked,
+                        activeForWorkspace: activeForWorkspace,
+                        activeForSurface: activeForSurface,
+                        restoreBacked: restoreAuthority,
+                        launchBacked: launchBacked,
+                        transcriptBacked: transcriptBacked
+                    ),
                     "runtime_status": record.runtimeStatus?.rawValue ?? NSNull(),
                     "agent_lifecycle": record.agentLifecycle?.rawValue ?? NSNull(),
                     "started_at_unix": record.startedAt,
@@ -588,6 +619,7 @@ extension CMUXCLI {
                         activeForWorkspace: activeForWorkspace,
                         activeForSurface: activeForSurface,
                         record: record,
+                        nativeThreadBacked: nativeThreadBacked,
                         launchBacked: launchBacked,
                         transcriptBacked: transcriptBacked
                     )
@@ -756,6 +788,8 @@ extension CMUXCLI {
 
         Inspect coding-agent sessions owned by the targeted cmux instance.
         The target comes from --socket, CMUX_SOCKET_PATH, or the default cmux socket.
+        Codex nodes are native app-server threads. Shell, Git, build, and helper
+        child processes are excluded unless Codex reports them as threads.
         `agents list` prints session diagnostics; pass --json for schema version 2 JSON.
         `agents tree` projects saved run and parent metadata into nodes and edges.
 
@@ -765,12 +799,13 @@ extension CMUXCLI {
           --workspace <id>      Filter to one saved workspace id
           --surface <id>        Filter to one saved surface id
           --state-dir <path>    Override hook state directory
-          --all                 Include inactive saved records
+          --all                 Include retained inactive records (roughly seven days)
           --json                Print structured JSON
 
         List options:
           --cwd <text>          Filter by saved cwd or launch working directory
-          --codex-home <path>   Override the Codex home used for transcript checks
+          --transcripts         Scan Codex transcript files for deep diagnostics
+          --codex-home <path>   Override Codex home when scanning transcripts
           --limit <n>           Limit rows (default: 100)
 
         Tree options:
@@ -1200,16 +1235,49 @@ extension CMUXCLI {
                 return true
             }
         }
+        return sessionsListSavedTranscriptBacked(record: record, fileManager: fileManager)
+    }
+
+    private func sessionsListSavedTranscriptBacked(
+        record: ClaudeHookSessionRecord,
+        fileManager: FileManager
+    ) -> Bool {
         guard let transcriptPath = sessionsListNormalized(record.transcriptPath) else {
             return false
         }
         return fileManager.fileExists(atPath: sessionsListExpandedPath(transcriptPath))
     }
 
+    private func sessionsListNativeThreadBacked(
+        agent: String,
+        record: ClaudeHookSessionRecord
+    ) -> Bool {
+        agent == "codex" && sessionsListNormalized(record.runId) != nil
+    }
+
+    private func sessionsListEvidenceSources(
+        nativeThreadBacked: Bool,
+        activeForWorkspace: Bool,
+        activeForSurface: Bool,
+        restoreBacked: Bool,
+        launchBacked: Bool,
+        transcriptBacked: Bool
+    ) -> [String] {
+        var sources: [String] = []
+        if nativeThreadBacked { sources.append("native_thread") }
+        if activeForWorkspace { sources.append("active_workspace") }
+        if activeForSurface { sources.append("active_surface") }
+        if restoreBacked { sources.append("restore") }
+        if launchBacked { sources.append("launch") }
+        if transcriptBacked { sources.append("transcript") }
+        return sources
+    }
+
     private func sessionsListDefaultVisible(
         activeForWorkspace: Bool,
         activeForSurface: Bool,
         record: ClaudeHookSessionRecord,
+        nativeThreadBacked: Bool,
         launchBacked: Bool,
         transcriptBacked: Bool
     ) -> Bool {
@@ -1217,6 +1285,7 @@ extension CMUXCLI {
             || activeForSurface
             || record.restoreAuthority == true
             || record.isRestorable == true
+            || nativeThreadBacked
             || launchBacked
             || transcriptBacked
     }

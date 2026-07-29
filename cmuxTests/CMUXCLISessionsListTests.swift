@@ -1111,6 +1111,110 @@ extension CMUXCLIErrorOutputRegressionTests {
         #expect(sessions.first?["relationship"] is NSNull)
     }
 
+    @Test func agentsDefaultIncludesNativeThreadsWithoutScanningTranscripts() throws {
+        let cliPath = try bundledCLIPath()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-agents-native-evidence-\(UUID().uuidString)", isDirectory: true)
+        let stateDir = root.appendingPathComponent("state", isDirectory: true)
+        let codexHome = root.appendingPathComponent("codex-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: codexHome.appendingPathComponent("sessions", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store: [String: Any] = [
+            "version": 1,
+            "sessions": [
+                "root-thread": [
+                    "sessionId": "root-thread",
+                    "workspaceId": "workspace-root",
+                    "surfaceId": "surface-root",
+                    "runId": "root-thread",
+                    "restoreAuthority": false,
+                    "startedAt": 100.0,
+                    "updatedAt": 200.0,
+                ],
+                "child-thread": [
+                    "sessionId": "child-thread",
+                    "workspaceId": "workspace-root",
+                    "surfaceId": "",
+                    "runId": "child-thread",
+                    "parentRunId": "root-thread",
+                    "parentSessionId": "root-thread",
+                    "relationship": "spawned",
+                    "restoreAuthority": false,
+                    "startedAt": 110.0,
+                    "updatedAt": 190.0,
+                ],
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: store, options: [.sortedKeys])
+        try data.write(to: stateDir.appendingPathComponent("codex-hook-sessions.json"), options: .atomic)
+        let responder = try agentsInstanceResponder(workspaces: [
+            "workspace-root": ["surface-root"],
+        ])
+        defer { responder.stop() }
+
+        var environment = agentsTestEnvironment()
+        environment["CMUX_AGENT_HOOK_STATE_DIR"] = stateDir.path
+        environment["CODEX_HOME"] = codexHome.path
+        let result = runProcess(
+            executablePath: cliPath,
+            arguments: ["--socket", responder.path, "agents", "list", "--agent", "codex", "--json"],
+            environment: environment,
+            timeout: 5
+        )
+
+        #expect(result.status == 0, Comment(rawValue: result.stdout))
+        let payload = try #require(
+            JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        )
+        let sessions = try #require(payload["sessions"] as? [[String: Any]])
+        #expect(Set(sessions.compactMap { $0["session_id"] as? String }) == [
+            "root-thread",
+            "child-thread",
+        ])
+        #expect(sessions.allSatisfy { $0["native_thread_backed"] as? Bool == true })
+        #expect(sessions.allSatisfy {
+            ($0["evidence_sources"] as? [String])?.contains("native_thread") == true
+        })
+        #expect(sessions.allSatisfy { $0["codex_transcript_scan_performed"] as? Bool == false })
+        #expect(sessions.allSatisfy { $0["codex_indexed"] is NSNull })
+    }
+
+    @Test func codexTeamsBatchUpsertPreservesNativeLineage() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-agents-batch-store-\(UUID().uuidString)", isDirectory: true)
+        let stateURL = root.appendingPathComponent("codex-hook-sessions.json")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ClaudeHookSessionStore(processEnv: [
+            "CMUX_CLAUDE_HOOK_STATE_PATH": stateURL.path,
+        ])
+        let records = (0..<1_000).map { index in
+            CodexTeamsThreadStoreRecord(
+                sessionId: "thread-\(index)",
+                parentThreadId: index == 0 ? nil : "thread-\(index - 1)",
+                workspaceId: "workspace-root",
+                surfaceId: index == 0 ? "surface-root" : "",
+                cwd: root.path
+            )
+        }
+
+        try store.upsertCodexTeamsThreads(records)
+
+        let persisted = try JSONDecoder().decode(
+            ClaudeHookSessionStoreFile.self,
+            from: Data(contentsOf: stateURL)
+        )
+        #expect(persisted.sessions.count == records.count)
+        #expect(persisted.sessions["thread-0"]?.runId == "thread-0")
+        #expect(persisted.sessions["thread-999"]?.parentRunId == "thread-998")
+        #expect(persisted.sessions["thread-999"]?.relationship == "spawned")
+    }
+
     @Test func agentsTreeBuildsRelationshipsFromSavedSessionMetadata() throws {
         let cliPath = try bundledCLIPath()
         let root = FileManager.default.temporaryDirectory
@@ -1127,7 +1231,7 @@ extension CMUXCLIErrorOutputRegressionTests {
                     "workspaceId": "workspace-root",
                     "surfaceId": "surface-root",
                     "runId": "root-run",
-                    "restoreAuthority": true,
+                    "restoreAuthority": false,
                     "startedAt": 100.0,
                     "updatedAt": 200.0,
                 ],
@@ -1161,7 +1265,7 @@ extension CMUXCLIErrorOutputRegressionTests {
 
         let result = runProcess(
             executablePath: cliPath,
-            arguments: ["--socket", responder.path, "agents", "tree", "--agent", "codex", "--all", "--json"],
+            arguments: ["--socket", responder.path, "agents", "tree", "--agent", "codex", "--json"],
             environment: environment,
             timeout: 5
         )
