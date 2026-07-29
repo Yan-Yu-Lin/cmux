@@ -443,7 +443,7 @@ extension CmuxTopProcessSnapshot {
         return lastCount > 0 ? bsdInfos(from: lastPIDs, count: lastCount) : []
     }
 
-    private static func bsdInfo(for pid: Int) -> proc_bsdinfo? {
+    static func bsdInfo(for pid: Int) -> proc_bsdinfo? {
         var info = proc_bsdinfo()
         let expectedSize = MemoryLayout<proc_bsdinfo>.stride
         let size = proc_pidinfo(pid_t(pid), PROC_PIDTBSDINFO, 0, &info, Int32(expectedSize))

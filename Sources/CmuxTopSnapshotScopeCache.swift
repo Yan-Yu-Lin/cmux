@@ -171,7 +171,7 @@ extension CmuxTopProcessSnapshot {
     // Probes a single process for its cmux scope via sysctl.
     //
     // `KERN_PROCARGS2` can fail two very different ways: transiently, because the
-    // process exited mid-probe or its pid was reused (then `kinfoProc` no longer
+    // process exited mid-probe or its pid was reused (then `bsdInfo` no longer
     // matches the expected start-time key), or permanently, because the process
     // belongs to another user / is protected (the kernel denies procargs for the
     // process's whole life). We must cache the permanent case as a definitive
@@ -184,7 +184,7 @@ extension CmuxTopProcessSnapshot {
     // still alive with the same start time, the failure is a permanent denial and
     // resolves to nil; otherwise it raced with exit/reuse and is `.unavailable`.
     // Callers derive `expectedCacheKey` from a `proc_bsdinfo` snapshot of this pid
-    // in the same enumeration pass, so a pre-read `kinfoProc` check would only
+    // in the same enumeration pass, so a pre-read identity check would only
     // repeat work. The post-read guard still catches pid reuse during the
     // `KERN_PROCARGS2` probe window.
     static func cmuxScopeProbe(
@@ -193,26 +193,17 @@ extension CmuxTopProcessSnapshot {
     ) -> CmuxTopProcessScopeProbeResult {
         guard pid > 0, pid <= Int(Int32.max) else { return .unavailable }
 
-        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, Int32(pid)]
-        var size: size_t = 0
-        guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0,
-              size > MemoryLayout<Int32>.size else {
-            // Sizing failed: permanent denial if still alive, else exit race.
-            return processMatchesKey(pid, expectedCacheKey) ? .resolved(nil) : .unavailable
+        let probedScope: CmuxTopProcessScope?? = withKernProcArgsBytes(for: pid) { bytes in
+            cmuxScope(fromKernProcArgsBuffer: bytes)
         }
-
-        var buffer = [UInt8](repeating: 0, count: size)
-        let success = buffer.withUnsafeMutableBytes { rawBuffer in
-            sysctl(&mib, u_int(mib.count), rawBuffer.baseAddress, &size, nil, 0) == 0
-        }
-        guard success else {
+        guard let probedScope else {
             return processMatchesKey(pid, expectedCacheKey) ? .resolved(nil) : .unavailable
         }
         guard processMatchesKey(pid, expectedCacheKey) else {
             return .unavailable
         }
 
-        return .resolved(cmuxScope(fromKernProcArgs: Array(buffer.prefix(Int(size)))))
+        return .resolved(probedScope)
     }
 
     // True when `pid` is still the same process (same start time) as the key.
@@ -220,11 +211,19 @@ extension CmuxTopProcessSnapshot {
         _ pid: Int,
         _ expectedCacheKey: CmuxTopProcessScopeCacheKey
     ) -> Bool {
-        guard let process = kinfoProc(for: pid) else { return false }
+        guard let process = bsdInfo(for: pid) else { return false }
         return scopeCacheKey(from: process) == expectedCacheKey
     }
 
     static func cmuxScope(fromKernProcArgs bytes: [UInt8]) -> CmuxTopProcessScope? {
+        bytes.withUnsafeBufferPointer { buffer in
+            cmuxScope(fromKernProcArgsBuffer: buffer)
+        }
+    }
+
+    private static func cmuxScope(
+        fromKernProcArgsBuffer bytes: UnsafeBufferPointer<UInt8>
+    ) -> CmuxTopProcessScope? {
         guard let process = cmuxScopeArgumentsAndEnvironment(fromKernProcArgs: bytes) else {
             return nil
         }
@@ -235,7 +234,7 @@ extension CmuxTopProcessSnapshot {
     /// Full process environments can contain thousands of strings, so building
     /// a dictionary for every system process causes avoidable allocator churn.
     private static func cmuxScopeArgumentsAndEnvironment(
-        fromKernProcArgs bytes: [UInt8]
+        fromKernProcArgs bytes: UnsafeBufferPointer<UInt8>
     ) -> CmuxTopProcessArguments? {
         guard bytes.count > MemoryLayout<Int32>.size else { return nil }
 
@@ -279,7 +278,7 @@ extension CmuxTopProcessSnapshot {
     }
 
     private static func cmuxScopeEnvironmentEntry(
-        _ bytes: ArraySlice<UInt8>
+        _ bytes: Slice<UnsafeBufferPointer<UInt8>>
     ) -> (key: String, value: String)? {
         guard let equals = bytes.firstIndex(of: 0x3D) else {
             return nil
@@ -304,19 +303,19 @@ extension CmuxTopProcessSnapshot {
         return (key, value)
     }
 
-    private static func skipKernProcString(in bytes: [UInt8], index: inout Int) {
+    private static func skipKernProcString(in bytes: UnsafeBufferPointer<UInt8>, index: inout Int) {
         while index < bytes.count, bytes[index] != 0 {
             index += 1
         }
     }
 
-    private static func skipKernProcNulls(in bytes: [UInt8], index: inout Int) {
+    private static func skipKernProcNulls(in bytes: UnsafeBufferPointer<UInt8>, index: inout Int) {
         while index < bytes.count, bytes[index] == 0 {
             index += 1
         }
     }
 
-    private static func consumeKernProcNull(in bytes: [UInt8], index: inout Int) {
+    private static func consumeKernProcNull(in bytes: UnsafeBufferPointer<UInt8>, index: inout Int) {
         if index < bytes.count, bytes[index] == 0 {
             index += 1
         }
@@ -405,20 +404,6 @@ extension CmuxTopProcessSnapshot {
         return nil
     }
 
-    private static func kinfoProc(for pid: Int) -> kinfo_proc? {
-        guard pid > 0, pid <= Int(Int32.max) else { return nil }
-
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, Int32(pid)]
-        var process = kinfo_proc()
-        var length = MemoryLayout<kinfo_proc>.stride
-        let result = sysctl(&mib, u_int(mib.count), &process, &length, nil, 0)
-        guard result == 0,
-              length >= MemoryLayout<kinfo_proc>.stride,
-              process.kp_proc.p_pid == pid_t(pid) else {
-            return nil
-        }
-        return process
-    }
 }
 
 extension CmuxTopProcessArguments {
