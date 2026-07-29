@@ -4443,6 +4443,64 @@ enum AppIconLaunchState {
     }
 }
 
+enum AppIconRuntimeImage {
+    private static let pointDimension: CGFloat = 128
+    private static let pixelDimension = 256
+
+    static func image(named name: String) -> NSImage? {
+        guard let source = NSImage(named: name),
+              let prepared = prepared(source) else {
+            return nil
+        }
+        return prepared
+    }
+
+    static func prepared(_ source: NSImage) -> NSImage? {
+        guard source.size.width > 0,
+              source.size.height > 0,
+              let bitmap = NSBitmapImageRep(
+                  bitmapDataPlanes: nil,
+                  pixelsWide: pixelDimension,
+                  pixelsHigh: pixelDimension,
+                  bitsPerSample: 8,
+                  samplesPerPixel: 4,
+                  hasAlpha: true,
+                  isPlanar: false,
+                  colorSpaceName: .deviceRGB,
+                  bytesPerRow: 0,
+                  bitsPerPixel: 0
+              ),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            return nil
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        context.imageInterpolation = .high
+        source.draw(
+            in: NSRect(
+                x: 0,
+                y: 0,
+                width: CGFloat(pixelDimension),
+                height: CGFloat(pixelDimension)
+            ),
+            from: NSRect(origin: .zero, size: source.size),
+            operation: .copy,
+            fraction: 1
+        )
+        context.flushGraphics()
+
+        let pointSize = NSSize(width: pointDimension, height: pointDimension)
+        bitmap.size = pointSize
+        let prepared = NSImage(size: pointSize)
+        prepared.addRepresentation(bitmap)
+        prepared.isTemplate = source.isTemplate
+        prepared.accessibilityDescription = source.accessibilityDescription
+        return prepared
+    }
+}
+
 enum AppIconSettings {
     static let modeKey = "appIconMode"
     static let defaultMode: AppIconMode = .automatic
@@ -4475,7 +4533,7 @@ enum AppIconSettings {
                 },
                 imageForMode: { mode in
                     guard let imageName = mode.imageName else { return nil }
-                    return NSImage(named: imageName)
+                    return AppIconRuntimeImage.image(named: imageName)
                 },
                 setApplicationIconImage: { icon in
                     NSApplication.shared.applicationIconImage = icon
@@ -4579,7 +4637,7 @@ final class AppIconAppearanceObserver: NSObject {
                     return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                 },
                 imageForName: { imageName in
-                    NSImage(named: imageName)
+                    AppIconRuntimeImage.image(named: imageName)
                 },
                 setApplicationIconImage: { icon in
                     NSApplication.shared.applicationIconImage = icon
