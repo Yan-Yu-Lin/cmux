@@ -16,6 +16,36 @@ import Darwin
 // must not interleave with each other.
 @Suite(.serialized)
 struct CmuxTopSnapshotScopeCacheTests {
+    @Test func bulkKernelProcessMapsTopologyWithoutPerPIDLookup() {
+        var kernelProcess = kinfo_proc()
+        kernelProcess.kp_proc.p_pid = 901_000
+        kernelProcess.kp_proc.p_stat = 3
+        kernelProcess.kp_proc.p_un.__p_starttime.tv_sec = 1_700_000_000
+        kernelProcess.kp_proc.p_un.__p_starttime.tv_usec = 123_456
+        kernelProcess.kp_eproc.e_ppid = 900_999
+        kernelProcess.kp_eproc.e_pgid = 901_000
+        kernelProcess.kp_eproc.e_tdev = 42
+        kernelProcess.kp_eproc.e_tpgid = 901_000
+        kernelProcess.kp_eproc.e_ucred.cr_uid = 501
+        withUnsafeMutableBytes(of: &kernelProcess.kp_proc.p_comm) { destination in
+            destination.copyBytes(from: "cmux\0".utf8)
+        }
+
+        let mapped = CmuxTopProcessSnapshot.bsdInfo(from: kernelProcess)
+        let cacheKey = CmuxTopProcessSnapshot.scopeCacheKey(from: mapped)
+
+        #expect(mapped.pbi_pid == 901_000)
+        #expect(mapped.pbi_ppid == 900_999)
+        #expect(mapped.pbi_pgid == 901_000)
+        #expect(mapped.e_tdev == 42)
+        #expect(mapped.e_tpgid == 901_000)
+        #expect(mapped.pbi_uid == 501)
+        #expect(mapped.pbi_status == 3)
+        #expect(cacheKey.startSeconds == 1_700_000_000)
+        #expect(cacheKey.startMicroseconds == 123_456)
+        #expect(cacheKey.executableName == "cmux")
+    }
+
     @Test func execMonitorTargetsArgumentScopedExecutable() {
         #expect(
             CmuxTopProcessSnapshot.requiresCMUXScopeExecMonitoring(
