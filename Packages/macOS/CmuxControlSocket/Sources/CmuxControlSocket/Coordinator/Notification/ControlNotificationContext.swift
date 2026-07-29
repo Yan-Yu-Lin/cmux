@@ -158,8 +158,23 @@ public protocol ControlNotificationContext: AnyObject {
         enabled: Bool?,
         horizontalPosition: Double?,
         displayKey: String?,
-        resetDisplayPosition: Bool
+        resetDisplayPosition: Bool,
+        expandedWidth: Double?,
+        expandedHeight: Double?,
+        resetDisplaySize: Bool,
+        swipeRowKind: String?,
+        swipeDirection: String?,
+        swipeAction: String?,
+        resetSwipeActions: Bool
     ) -> ControlDynamicNotchSettingsSnapshot
+
+    /// Pins or releases the visible Dynamic Notch phase and optionally selects
+    /// Feed or Unread on every display or one display.
+    func controlDynamicNotchPresent(
+        phase: String,
+        section: String?,
+        displayKey: String?
+    ) -> Bool
 
     /// The localized notification-domain error strings, resolved against the
     /// app's `Localizable.xcstrings` (the package bundle lacks these keys, so

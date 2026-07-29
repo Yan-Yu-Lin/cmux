@@ -22,6 +22,21 @@ public struct NotificationsCatalogSection: SettingCatalogSection {
         userDefaultsKey: "notificationDynamicNotchDisplayPositions"
     )
 
+    /// Per-display expanded viewport sizes written by pointer resizing or CLI.
+    public let dynamicNotchDisplaySizes = DefaultsKey<[String: String]>(
+        id: "notifications.dynamicNotchDisplaySizes",
+        defaultValue: [:],
+        userDefaultsKey: "notificationDynamicNotchDisplaySizes"
+    )
+
+    /// Default left/right row operations for notifications, Feed, and unread.
+    public let dynamicNotchSwipeActions =
+        DefaultsKey<DynamicNotchSwipeActions>(
+            id: "notifications.dynamicNotchSwipeActions",
+            defaultValue: DynamicNotchSwipeActions(),
+            userDefaultsKey: "notificationDynamicNotchSwipeActions"
+        )
+
     public let dockBadge = DefaultsKey<Bool>(
         id: "notifications.dockBadge",
         defaultValue: true,

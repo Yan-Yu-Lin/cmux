@@ -2,7 +2,7 @@ import CmuxSettings
 import SwiftUI
 
 /// Interactive content hosted by DynamicNotchKit for one terminal notification.
-struct DynamicNotchNotificationView: View {
+struct DynamicNotchNotificationView: View, Equatable {
     let notification: TerminalNotification
     let isTrayExpanded: Bool
     let shouldAutofocus: Bool
@@ -10,6 +10,16 @@ struct DynamicNotchNotificationView: View {
     let performAction: (String, [String: String]) -> Void
     @State private var values: [String: String]
     @FocusState private var focusedInputID: String?
+
+    static func == (
+        lhs: DynamicNotchNotificationView,
+        rhs: DynamicNotchNotificationView
+    ) -> Bool {
+        lhs.notification == rhs.notification
+            && lhs.isTrayExpanded == rhs.isTrayExpanded
+            && lhs.shouldAutofocus == rhs.shouldAutofocus
+            && lhs.appearance == rhs.appearance
+    }
 
     init(
         notification: TerminalNotification,

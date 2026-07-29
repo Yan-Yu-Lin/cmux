@@ -11,7 +11,7 @@ struct DynamicNotchNotificationCompactLeadingView: View {
         let appearance = model.trayAppearance
         Group {
             if model.phase == .compact {
-                Image(systemName: "bell.badge.fill")
+                Image(systemName: compactSymbolName)
                     .font(.system(
                         size: appearance.dimension(.compactIconSize),
                         weight: .semibold
@@ -54,6 +54,12 @@ struct DynamicNotchNotificationCompactLeadingView: View {
             ) / 2
         )
     }
+
+    private var compactSymbolName: String {
+        model.feedCount > 0
+            ? "bolt.horizontal.circle.fill"
+            : "bell.badge.fill"
+    }
 }
 
 /// Pending count rendered by DynamicNotchKit in the menu-bar compact state.
@@ -66,7 +72,7 @@ struct DynamicNotchNotificationCompactTrailingView: View {
         let appearance = model.trayAppearance
         Group {
             if model.phase == .compact {
-                Text(model.notifications.count, format: .number)
+                Text(model.badgeCount, format: .number)
                     .font(.callout.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(
@@ -94,13 +100,13 @@ struct DynamicNotchNotificationCompactTrailingView: View {
         .accessibilityLabel(
             String(localized: "notifications.title", defaultValue: "Notifications")
         )
-        .accessibilityValue(Text(model.notifications.count, format: .number))
+        .accessibilityValue(Text(model.badgeCount, format: .number))
         .accessibilityHidden(model.phase != .compact)
         .animation(
             reduceMotion
                 ? nil
                 : .snappy(duration: Double(appearance.dimension(.animationDuration))),
-            value: model.notifications.count
+            value: model.badgeCount
         )
         .animation(
             reduceMotion

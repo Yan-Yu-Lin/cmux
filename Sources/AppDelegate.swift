@@ -665,6 +665,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         },
         markRead: { notificationID in
             TerminalNotificationStore.shared.markRead(id: notificationID)
+        },
+        dismissNotification: { notificationID in
+            TerminalNotificationStore.shared.remove(id: notificationID)
         }
     )
 
@@ -15995,6 +15998,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             [weak self] mutation in
             self?.dynamicNotchNotificationPresenter.apply(mutation)
         }
+        dynamicNotchNotificationPresenter.start()
     }
 
     private func disableNativeTabbingShortcut() {

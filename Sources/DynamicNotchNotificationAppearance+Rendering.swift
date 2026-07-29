@@ -39,6 +39,16 @@ extension DynamicNotchAppearance {
     }
 
     var dynamicNotchChrome: DynamicNotchChrome {
+        dynamicNotchChrome(
+            expandedWidthOverride: nil,
+            expandedHeightOverride: nil
+        )
+    }
+
+    func dynamicNotchChrome(
+        expandedWidthOverride: CGFloat?,
+        expandedHeightOverride: CGFloat?
+    ) -> DynamicNotchChrome {
         let shellPadding = dimension(.shellPadding)
         let scrollContainerHorizontalPadding = dimension(
             .scrollContainerHorizontalPadding
@@ -74,15 +84,30 @@ extension DynamicNotchAppearance {
             notchTopCornerRadius: dimension(.notchTopCornerRadius),
             notchBottomCornerRadius: dimension(.notchBottomCornerRadius),
             syntheticNotchWidth: dimension(.syntheticNotchWidth),
-            syntheticNotchSafeAreaWidth: dynamicNotchHorizontalSafeWidth,
+            syntheticNotchSafeAreaWidth:
+                dynamicNotchHorizontalSafeWidth(
+                    expandedWidthOverride: expandedWidthOverride
+                ),
             syntheticNotchHorizontalPosition: dimension(
                 .syntheticNotchHorizontalPosition
+            ),
+            expandedContentSize: CGSize(
+                width: expandedWidthOverride
+                    ?? dimension(.expandedWidth),
+                height: expandedHeightOverride
+                    ?? dimension(.maximumExpandedHeight)
             )
         )
     }
 
     var dynamicNotchHorizontalSafeWidth: CGFloat {
-        dimension(.expandedWidth)
+        dynamicNotchHorizontalSafeWidth(expandedWidthOverride: nil)
+    }
+
+    func dynamicNotchHorizontalSafeWidth(
+        expandedWidthOverride: CGFloat?
+    ) -> CGFloat {
+        (expandedWidthOverride ?? dimension(.expandedWidth))
             + (dimension(.notchTopCornerRadius) * 2)
     }
 
