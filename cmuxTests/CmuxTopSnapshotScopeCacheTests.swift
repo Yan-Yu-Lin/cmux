@@ -16,9 +16,6 @@ import Darwin
 // must not interleave with each other.
 @Suite(.serialized)
 struct CmuxTopSnapshotScopeCacheTests {
-    static let nowNanoseconds: UInt64 = 1_000_000_000
-    static let muchLaterNanoseconds: UInt64 = 1_000_000_000_000
-
     @Test func discoveryKeepsScopedProcessesAndTheirUnscopedDescendants() {
         let included = CmuxTopProcessSnapshot.discoveryIncludedPIDs(
             parentPIDByPID: [
@@ -92,9 +89,9 @@ struct CmuxTopSnapshotScopeCacheTests {
         }
 
         let first = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_001, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_001, cacheKey: cacheKey, probe: probe)
         let second = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_001, cacheKey: cacheKey, nowNanoseconds: Self.muchLaterNanoseconds, probe: probe)
+            for: 901_001, cacheKey: cacheKey, probe: probe)
 
         #expect(first == nil)
         #expect(second == nil)
@@ -121,9 +118,9 @@ struct CmuxTopSnapshotScopeCacheTests {
 
         // A discovered scope is cached indefinitely.
         let first = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_002, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_002, cacheKey: cacheKey, probe: probe)
         let second = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_002, cacheKey: cacheKey, nowNanoseconds: Self.muchLaterNanoseconds, probe: probe)
+            for: 901_002, cacheKey: cacheKey, probe: probe)
 
         #expect(first == expected)
         #expect(second == expected)
@@ -153,13 +150,13 @@ struct CmuxTopSnapshotScopeCacheTests {
         }
 
         let first = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_003, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_003, cacheKey: cacheKey, probe: probe)
         let second = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_003, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_003, cacheKey: cacheKey, probe: probe)
         let third = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_003, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_003, cacheKey: cacheKey, probe: probe)
         let fourth = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_003, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_003, cacheKey: cacheKey, probe: probe)
 
         #expect(first == nil)
         #expect(second == nil)
@@ -191,12 +188,12 @@ struct CmuxTopSnapshotScopeCacheTests {
 
         // Sampled pre-exec: no scope yet, cached negative.
         let preExec = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_004, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_004, cacheKey: cacheKey, probe: probe)
         // Polled again without an exec: served from the negative cache.
-        let withinTTL = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_004, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+        let withoutExec = CmuxTopProcessSnapshot.cachedCMUXScope(
+            for: 901_004, cacheKey: cacheKey, probe: probe)
         #expect(preExec == nil)
-        #expect(withinTTL == nil)
+        #expect(withoutExec == nil)
         #expect(probeCount == 1)
 
         // The process has since execed into a cmux-scoped command without changing
@@ -204,7 +201,7 @@ struct CmuxTopSnapshotScopeCacheTests {
         resolvedScope = postExecScope
         CmuxTopProcessSnapshot.invalidateCMUXScopeCache(forPIDs: [901_004])
         let afterExec = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_004, cacheKey: cacheKey, nowNanoseconds: Self.muchLaterNanoseconds, probe: probe)
+            for: 901_004, cacheKey: cacheKey, probe: probe)
         #expect(afterExec == postExecScope)
         #expect(probeCount == 2, "exec-invalidated negative entry must be re-probed")
     }
@@ -318,17 +315,17 @@ struct CmuxTopSnapshotScopeCacheTests {
         // discovering and caching the positive scope while the probe is in flight.
         let probe: (Int, CmuxTopProcessScopeCacheKey) -> CmuxTopProcessScopeProbeResult = { pid, key in
             _ = CmuxTopProcessSnapshot.cachedCMUXScope(
-                for: pid, cacheKey: key, nowNanoseconds: Self.nowNanoseconds) { _, _ in .resolved(positive) }
+                for: pid, cacheKey: key) { _, _ in .resolved(positive) }
             return .resolved(nil)
         }
 
         let result = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_005, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds, probe: probe)
+            for: 901_005, cacheKey: cacheKey, probe: probe)
         #expect(result == positive, "stale negative must not clobber a concurrently discovered positive")
 
         // The positive entry survives for later polls.
         let nextPoll = CmuxTopProcessSnapshot.cachedCMUXScope(
-            for: 901_005, cacheKey: cacheKey, nowNanoseconds: Self.nowNanoseconds) { _, _ in .resolved(nil) }
+            for: 901_005, cacheKey: cacheKey) { _, _ in .resolved(nil) }
         #expect(nextPoll == positive)
     }
 }

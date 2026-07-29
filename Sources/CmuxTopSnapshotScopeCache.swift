@@ -22,26 +22,12 @@ struct CmuxTopProcessScopeCacheKey: Hashable {
 }
 
 private struct CmuxTopProcessScopeCacheValue {
-    // nil means "this process was probed and has no cmux scope". A negative entry
-    // is honored as a hit only until `negativeExpiresAtNanos`, so a non-cmux
-    // process is re-probed at most once per TTL window instead of on every
-    // system.top poll. Expiration phases are distributed across that window to
-    // avoid a machine-wide re-probe burst. Positive entries never expire
-    // (`negativeExpiresAtNanos` is ignored when `scope != nil`): a cmux scope
-    // comes from inherited environment or a stable argv and does not disappear
-    // for the process lifetime.
+    // nil means "this process was probed and has no cmux scope". Both positive
+    // and negative results remain valid until process identity changes. Ordinary
+    // execs change `executableName` in the cache key; same-name execs are
+    // invalidated by CmuxTopProcessExecMonitor.
     let scope: CmuxTopProcessScope?
-    let negativeExpiresAtNanos: UInt64
 }
-
-// Maximum time a "no cmux scope" result stays cached before the process is
-// probed again. The key includes the kernel executable name, so ordinary execs
-// invalidate immediately. The TTL still covers same-name execs that change argv
-// or environment without changing the pid, start time, or executable name.
-// Newly spawned processes have new keys and are probed immediately.
-// Internal (not private) so tests can read the TTL via @testable import.
-nonisolated let cmuxTopNegativeScopeTTLNanoseconds: UInt64 = 60 * 1_000_000_000
-private nonisolated let cmuxTopNegativeScopeTargetRefreshesPerSecond = 10
 
 // Result of probing a single process for its cmux scope. `resolved` means the
 // probe completed (the scope may legitimately be absent) and is safe to cache.
@@ -61,22 +47,6 @@ private nonisolated let cmuxTopScopeCache = OSAllocatedUnfairLock(
 )
 
 extension CmuxTopProcessSnapshot {
-    /// Keeps fallback probes for same-name execs bounded as the process table
-    /// grows. New processes and executable-name changes still miss the cache and
-    /// are probed immediately.
-    static func negativeScopeTTLNanoseconds(processCount: Int) -> UInt64 {
-        guard processCount > 0 else {
-            return cmuxTopNegativeScopeTTLNanoseconds
-        }
-        let seconds = processCount / cmuxTopNegativeScopeTargetRefreshesPerSecond
-            + (processCount % cmuxTopNegativeScopeTargetRefreshesPerSecond == 0 ? 0 : 1)
-        let (adaptiveTTL, overflow) = UInt64(seconds).multipliedReportingOverflow(
-            by: 1_000_000_000
-        )
-        guard !overflow else { return UInt64.max }
-        return max(cmuxTopNegativeScopeTTLNanoseconds, adaptiveTTL)
-    }
-
     static func scopeCacheKey(from kinfo: kinfo_proc) -> CmuxTopProcessScopeCacheKey {
         let startTime = kinfo.kp_proc.p_un.__p_starttime
         return CmuxTopProcessScopeCacheKey(
@@ -99,29 +69,17 @@ extension CmuxTopProcessSnapshot {
     static func cachedCMUXScope(
         for pid: Int,
         cacheKey: CmuxTopProcessScopeCacheKey,
-        nowNanoseconds: UInt64,
-        negativeTTLNanoseconds: UInt64 = cmuxTopNegativeScopeTTLNanoseconds,
         probe: (Int, CmuxTopProcessScopeCacheKey) -> CmuxTopProcessScopeProbeResult = CmuxTopProcessSnapshot.cmuxScopeProbe
     ) -> CmuxTopProcessScope? {
         if let cached = cmuxTopScopeCache.withLock({ cache in cache[cacheKey] }) {
-            if let scope = cached.scope {
-                // Positive results never expire: a discovered cmux scope is stable.
-                return scope
-            }
-            if nowNanoseconds < cached.negativeExpiresAtNanos {
-                // Negative result still within its TTL: honor the cached miss.
-                return nil
-            }
-            // Negative TTL expired: fall through and re-probe in case the process
-            // execed into a cmux-scoped command since it was last sampled.
+            return cached.scope
         }
 
         switch probe(pid, cacheKey) {
         case .resolved(let scope):
-            // Cache the resolved result. Positive scopes are kept indefinitely;
-            // negative scopes are kept only until the TTL elapses so a later exec
-            // is eventually attributed. The key is pruned to live pids each
-            // capture, so a recycled pid gets a fresh key.
+            // Cache the resolved result. Exec events invalidate negative results,
+            // and the key is pruned to live process identities each capture, so
+            // a recycled pid gets a fresh probe.
             //
             // capture() runs concurrently (async task-manager sampling and sync
             // system.top socket handling), and the probe happened outside the
@@ -133,14 +91,7 @@ extension CmuxTopProcessSnapshot {
                 if scope == nil, let existing = cache[cacheKey], let existingScope = existing.scope {
                     return existingScope
                 }
-                cache[cacheKey] = CmuxTopProcessScopeCacheValue(
-                    scope: scope,
-                    negativeExpiresAtNanos: negativeScopeExpiryNanoseconds(
-                        after: nowNanoseconds,
-                        cacheKey: cacheKey,
-                        ttlNanoseconds: negativeTTLNanoseconds
-                    )
-                )
+                cache[cacheKey] = CmuxTopProcessScopeCacheValue(scope: scope)
                 return scope
             }
         case .unavailable:
@@ -155,30 +106,11 @@ extension CmuxTopProcessSnapshot {
         }
     }
 
-    /// Assigns stable phases across the selected freshness window so negative
-    /// entries do not all expire in one snapshot.
-    private static func negativeScopeExpiryNanoseconds(
-        after nowNanoseconds: UInt64,
-        cacheKey: CmuxTopProcessScopeCacheKey,
-        ttlNanoseconds: UInt64
-    ) -> UInt64 {
-        let ttlNanoseconds = max(1, ttlNanoseconds)
-        let pid = UInt64(truncatingIfNeeded: cacheKey.pid)
-        let seconds = UInt64(truncatingIfNeeded: cacheKey.startSeconds)
-        let microseconds = UInt64(truncatingIfNeeded: cacheKey.startMicroseconds)
-        let nameHash = cacheKey.executableName.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
-            ($0 ^ UInt64($1)) &* 1_099_511_628_211
+    static func invalidateCMUXScopeCache(forPIDs pids: Set<Int>) {
+        guard !pids.isEmpty else { return }
+        cmuxTopScopeCache.withLock { cache in
+            cache = cache.filter { !pids.contains($0.key.pid) }
         }
-        let mixed = pid &* 0x9E37_79B1_85EB_CA87
-            ^ seconds &* 0xC2B2_AE3D_27D4_EB4F
-            ^ microseconds
-            ^ nameHash
-        let phase = mixed % ttlNanoseconds
-        let currentPhase = nowNanoseconds % ttlNanoseconds
-        let delta = phase > currentPhase
-            ? phase - currentPhase
-            : ttlNanoseconds - (currentPhase - phase)
-        return nowNanoseconds &+ delta
     }
 
     private static func scopeCacheExecutableName<T>(_ value: T) -> String {
