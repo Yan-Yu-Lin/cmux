@@ -1490,6 +1490,8 @@ final class TerminalNotificationStore: ObservableObject {
     }
 
     func markRead(id: UUID) {
+        // Read state drives the Unread projection. Pending Dynamic Notch rows
+        // keep their independent action/dismissal/timeout lifecycle.
         _ = markNotificationFeedRead(ids: [id])
     }
 
@@ -1514,7 +1516,6 @@ final class TerminalNotificationStore: ObservableObject {
         }
         if !activeIDs.isEmpty {
             notifications = updated
-            dismissDynamicNotchPresentations(withIdentifiers: activeIDs)
             center.removeDeliveredNotificationsOffMain(withIdentifiers: activeIDs)
             emitNotificationsDismissed(
                 ids: activeIDs,
@@ -1575,7 +1576,6 @@ final class TerminalNotificationStore: ObservableObject {
         setPanelDerivedWorkspaceUnread(false, forTabId: tabId)
         setWorkspaceRestoredUnread(false, forTabId: tabId)
         if !idsToClear.isEmpty {
-            dismissDynamicNotchPresentations(withIdentifiers: idsToClear)
             center.removeDeliveredNotificationsOffMain(withIdentifiers: idsToClear)
             emitNotificationsDismissed(
                 ids: idsToClear,
@@ -1620,7 +1620,6 @@ final class TerminalNotificationStore: ObservableObject {
             setWorkspaceRestoredUnread(false, forTabId: tabId)
         }
         if !idsToClear.isEmpty {
-            dismissDynamicNotchPresentations(withIdentifiers: idsToClear)
             center.removeDeliveredNotificationsOffMain(withIdentifiers: idsToClear)
             center.removePendingNotificationRequestsOffMain(withIdentifiers: idsToClear)
             emitNotificationsDismissed(ids: idsToClear, drainedSuperseded: supersededDrained)
@@ -1701,7 +1700,6 @@ final class TerminalNotificationStore: ObservableObject {
         clearPanelDerivedWorkspaceUnread()
         clearWorkspaceRestoredUnread()
         if !idsToClear.isEmpty {
-            dismissDynamicNotchPresentations(withIdentifiers: idsToClear)
             center.removeDeliveredNotificationsOffMain(withIdentifiers: idsToClear)
             center.removePendingNotificationRequestsOffMain(withIdentifiers: idsToClear)
             emitNotificationsDismissed(
