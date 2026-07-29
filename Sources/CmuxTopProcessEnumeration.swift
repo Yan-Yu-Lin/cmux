@@ -429,40 +429,73 @@ extension CmuxTopProcessSnapshot {
     }
 
     private static func allBSDProcesses() -> [proc_bsdinfo] {
-        let pidStride = MemoryLayout<pid_t>.stride
-        func bsdInfos(from pids: [pid_t], count: Int) -> [proc_bsdinfo] {
-            pids.prefix(count).compactMap { pid in
-                guard pid > 0 else { return nil }
-                return bsdInfo(for: Int(pid))
-            }
-        }
-
-        // proc_listallpids returns a PID count; the buffer size argument is bytes.
-        let initialPIDCount = Int(proc_listallpids(nil, 0))
-        guard initialPIDCount > 0 else { return [] }
-        var capacity = max(1, initialPIDCount + 32)
-        var lastPIDs: [pid_t] = []
-        var lastCount = 0
+        var mib = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
+        let processStride = MemoryLayout<kinfo_proc>.stride
         for _ in 0..<3 {
-            var pids = Array(repeating: pid_t(), count: capacity)
-            let returnedCount = pids.withUnsafeMutableBufferPointer { buffer in
-                proc_listallpids(buffer.baseAddress, Int32(buffer.count * pidStride))
+            var requiredBytes = 0
+            guard sysctl(&mib, u_int(mib.count), nil, &requiredBytes, nil, 0) == 0,
+                  requiredBytes > 0 else {
+                return []
             }
-            guard returnedCount >= 0 else {
-                return lastCount > 0 ? bsdInfos(from: lastPIDs, count: lastCount) : []
+
+            // Leave room for processes spawned between the size and data calls.
+            // KERN_PROC_ALL returns topology for every process in one syscall,
+            // avoiding a proc_pidinfo round trip for every PID on the machine.
+            let capacity = max(1, requiredBytes / processStride + 64)
+            var kernelProcesses = Array(repeating: kinfo_proc(), count: capacity)
+            var returnedBytes = kernelProcesses.count * processStride
+            let result = kernelProcesses.withUnsafeMutableBytes { buffer in
+                sysctl(
+                    &mib,
+                    u_int(mib.count),
+                    buffer.baseAddress,
+                    &returnedBytes,
+                    nil,
+                    0
+                )
             }
-            let returnedPIDCount = Int(returnedCount)
-            let count = min(pids.count, returnedPIDCount)
-            if count > 0 {
-                lastPIDs = pids
-                lastCount = count
+            if result == 0 {
+                let count = min(kernelProcesses.count, returnedBytes / processStride)
+                return kernelProcesses.prefix(count).compactMap { process in
+                    guard process.kp_proc.p_pid > 0 else { return nil }
+                    return bsdInfo(from: process)
+                }
             }
-            if returnedPIDCount < pids.count {
-                return bsdInfos(from: pids, count: count)
+            guard errno == ENOMEM else {
+                return []
             }
-            capacity = max(pids.count * 2, returnedPIDCount + 32)
         }
-        return lastCount > 0 ? bsdInfos(from: lastPIDs, count: lastCount) : []
+        return []
+    }
+
+    /// Converts the bulk KERN_PROC_ALL topology record to the libproc shape used
+    /// by the existing attribution and resource-sampling pipeline.
+    static func bsdInfo(from process: kinfo_proc) -> proc_bsdinfo {
+        var info = proc_bsdinfo()
+        info.pbi_flags = UInt32(bitPattern: process.kp_proc.p_flag)
+        info.pbi_status = UInt32(UInt8(bitPattern: process.kp_proc.p_stat))
+        info.pbi_xstatus = UInt32(process.kp_proc.p_xstat)
+        info.pbi_pid = UInt32(bitPattern: process.kp_proc.p_pid)
+        info.pbi_ppid = UInt32(bitPattern: process.kp_eproc.e_ppid)
+        info.pbi_uid = process.kp_eproc.e_ucred.cr_uid
+        info.pbi_gid = process.kp_eproc.e_ucred.cr_groups.0
+        info.pbi_ruid = process.kp_eproc.e_pcred.p_ruid
+        info.pbi_rgid = process.kp_eproc.e_pcred.p_rgid
+        info.pbi_svuid = process.kp_eproc.e_pcred.p_svuid
+        info.pbi_svgid = process.kp_eproc.e_pcred.p_svgid
+        info.pbi_pgid = UInt32(bitPattern: process.kp_eproc.e_pgid)
+        info.pbi_pjobc = UInt32(max(0, process.kp_eproc.e_jobc))
+        info.e_tdev = UInt32(bitPattern: process.kp_eproc.e_tdev)
+        info.e_tpgid = UInt32(bitPattern: process.kp_eproc.e_tpgid)
+        info.pbi_nice = Int32(process.kp_proc.p_nice)
+        info.pbi_start_tvsec = UInt64(max(0, process.kp_proc.p_un.__p_starttime.tv_sec))
+        info.pbi_start_tvusec = UInt64(max(0, process.kp_proc.p_un.__p_starttime.tv_usec))
+        withUnsafeBytes(of: process.kp_proc.p_comm) { source in
+            withUnsafeMutableBytes(of: &info.pbi_comm) { destination in
+                destination.copyBytes(from: source.prefix(destination.count))
+            }
+        }
+        return info
     }
 
     static func bsdInfo(for pid: Int) -> proc_bsdinfo? {
