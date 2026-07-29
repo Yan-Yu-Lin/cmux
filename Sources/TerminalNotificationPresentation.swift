@@ -28,10 +28,17 @@ struct TerminalNotificationPresentation: Hashable, Sendable {
         let kind: Kind
     }
 
+    struct SwipeAction: Hashable, Sendable {
+        let id: String
+        let title: String?
+    }
+
     let delivery: Delivery
     let iconSymbolName: String?
     let actions: [Action]
     let inputs: [Input]
+    let swipeLeftAction: SwipeAction?
+    let swipeRightAction: SwipeAction?
     let appearance: DynamicNotchAppearanceOverrides
     let responseToken: UUID?
     let timeout: TimeInterval
@@ -41,6 +48,8 @@ struct TerminalNotificationPresentation: Hashable, Sendable {
         iconSymbolName: String? = nil,
         actions: [Action] = [],
         inputs: [Input] = [],
+        swipeLeftAction: SwipeAction? = nil,
+        swipeRightAction: SwipeAction? = nil,
         appearance: DynamicNotchAppearanceOverrides = DynamicNotchAppearanceOverrides(),
         responseToken: UUID? = nil,
         timeout: TimeInterval = 8
@@ -49,6 +58,8 @@ struct TerminalNotificationPresentation: Hashable, Sendable {
         self.iconSymbolName = iconSymbolName
         self.actions = actions
         self.inputs = inputs
+        self.swipeLeftAction = swipeLeftAction
+        self.swipeRightAction = swipeRightAction
         self.appearance = appearance
         self.responseToken = responseToken
         self.timeout = timeout

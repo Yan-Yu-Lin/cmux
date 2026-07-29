@@ -475,10 +475,7 @@ private extension DynamicNotch {
         )
         panel.contentView = view
 
-        let size = NSSize(
-            width: screen.frame.width / 2,
-            height: screen.frame.height / 2
-        )
+        let size = presentationWindowSize(for: screen)
         let geometry = screen.dynamicNotchGeometry(
             syntheticNotchWidth: chrome.syntheticNotchWidth,
             syntheticNotchSafeAreaWidth:
@@ -544,10 +541,7 @@ private extension DynamicNotch {
         menubarHeight = geometry.menuBarHeight
         usesSyntheticNotch = !geometry.hasHardwareNotch
         if let window = windowController?.window {
-            let size = NSSize(
-                width: screen.frame.width / 2,
-                height: screen.frame.height / 2
-            )
+            let size = presentationWindowSize(for: screen)
             window.setFrame(
                 NSRect(
                     x: geometry.notchFrame.midX
@@ -559,5 +553,59 @@ private extension DynamicNotch {
                 display: false
             )
         }
+    }
+
+    func presentationWindowSize(for screen: NSScreen) -> NSSize {
+        let baseline = NSSize(
+            width: screen.frame.width / 2,
+            height: screen.frame.height / 2
+        )
+        guard let expandedContentSize = chrome.expandedContentSize else {
+            return baseline
+        }
+
+        let style = effectiveStyle(for: screen)
+        let horizontalInsets: CGFloat
+        let verticalInsets: CGFloat
+        if style.isNotch {
+            horizontalInsets =
+                chrome.notchContentInsets.leading
+                + chrome.notchContentInsets.trailing
+                + ((chrome.notchTopCornerRadius ?? 15) * 2)
+            verticalInsets =
+                notchSize.height
+                + chrome.notchContentInsets.top
+                + chrome.notchContentInsets.bottom
+        } else {
+            horizontalInsets =
+                chrome.floatingContentInsets.leading
+                + chrome.floatingContentInsets.trailing
+                + (chrome.floatingOuterPadding * 2)
+            verticalInsets =
+                chrome.floatingContentInsets.top
+                + chrome.floatingContentInsets.bottom
+                + (chrome.floatingOuterPadding * 2)
+        }
+        let captureAllowance: CGFloat = 24
+        return NSSize(
+            width: min(
+                screen.frame.width,
+                max(
+                    baseline.width,
+                    expandedContentSize.width
+                        + horizontalInsets
+                        + captureAllowance
+                )
+            ),
+            height: min(
+                screen.frame.height,
+                max(
+                    baseline.height,
+                    expandedContentSize.height
+                        + verticalInsets
+                        + captureAllowance
+                )
+            )
+        )
     }
 }
