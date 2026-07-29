@@ -41,6 +41,7 @@ private struct CmuxTopProcessScopeCacheValue {
 // Newly spawned processes have new keys and are probed immediately.
 // Internal (not private) so tests can read the TTL via @testable import.
 nonisolated let cmuxTopNegativeScopeTTLNanoseconds: UInt64 = 60 * 1_000_000_000
+private nonisolated let cmuxTopNegativeScopeTargetRefreshesPerSecond = 10
 
 // Result of probing a single process for its cmux scope. `resolved` means the
 // probe completed (the scope may legitimately be absent) and is safe to cache.
@@ -60,6 +61,22 @@ private nonisolated let cmuxTopScopeCache = OSAllocatedUnfairLock(
 )
 
 extension CmuxTopProcessSnapshot {
+    /// Keeps fallback probes for same-name execs bounded as the process table
+    /// grows. New processes and executable-name changes still miss the cache and
+    /// are probed immediately.
+    static func negativeScopeTTLNanoseconds(processCount: Int) -> UInt64 {
+        guard processCount > 0 else {
+            return cmuxTopNegativeScopeTTLNanoseconds
+        }
+        let seconds = processCount / cmuxTopNegativeScopeTargetRefreshesPerSecond
+            + (processCount % cmuxTopNegativeScopeTargetRefreshesPerSecond == 0 ? 0 : 1)
+        let (adaptiveTTL, overflow) = UInt64(seconds).multipliedReportingOverflow(
+            by: 1_000_000_000
+        )
+        guard !overflow else { return UInt64.max }
+        return max(cmuxTopNegativeScopeTTLNanoseconds, adaptiveTTL)
+    }
+
     static func scopeCacheKey(from kinfo: kinfo_proc) -> CmuxTopProcessScopeCacheKey {
         let startTime = kinfo.kp_proc.p_un.__p_starttime
         return CmuxTopProcessScopeCacheKey(
@@ -83,6 +100,7 @@ extension CmuxTopProcessSnapshot {
         for pid: Int,
         cacheKey: CmuxTopProcessScopeCacheKey,
         nowNanoseconds: UInt64,
+        negativeTTLNanoseconds: UInt64 = cmuxTopNegativeScopeTTLNanoseconds,
         probe: (Int, CmuxTopProcessScopeCacheKey) -> CmuxTopProcessScopeProbeResult = CmuxTopProcessSnapshot.cmuxScopeProbe
     ) -> CmuxTopProcessScope? {
         if let cached = cmuxTopScopeCache.withLock({ cache in cache[cacheKey] }) {
@@ -119,7 +137,8 @@ extension CmuxTopProcessSnapshot {
                     scope: scope,
                     negativeExpiresAtNanos: negativeScopeExpiryNanoseconds(
                         after: nowNanoseconds,
-                        cacheKey: cacheKey
+                        cacheKey: cacheKey,
+                        ttlNanoseconds: negativeTTLNanoseconds
                     )
                 )
                 return scope
@@ -136,12 +155,14 @@ extension CmuxTopProcessSnapshot {
         }
     }
 
-    /// Assigns stable phases across the existing 60-second freshness window so
-    /// thousands of negative entries do not all expire in one snapshot.
+    /// Assigns stable phases across the selected freshness window so negative
+    /// entries do not all expire in one snapshot.
     private static func negativeScopeExpiryNanoseconds(
         after nowNanoseconds: UInt64,
-        cacheKey: CmuxTopProcessScopeCacheKey
+        cacheKey: CmuxTopProcessScopeCacheKey,
+        ttlNanoseconds: UInt64
     ) -> UInt64 {
+        let ttlNanoseconds = max(1, ttlNanoseconds)
         let pid = UInt64(truncatingIfNeeded: cacheKey.pid)
         let seconds = UInt64(truncatingIfNeeded: cacheKey.startSeconds)
         let microseconds = UInt64(truncatingIfNeeded: cacheKey.startMicroseconds)
@@ -152,11 +173,11 @@ extension CmuxTopProcessSnapshot {
             ^ seconds &* 0xC2B2_AE3D_27D4_EB4F
             ^ microseconds
             ^ nameHash
-        let phase = mixed % cmuxTopNegativeScopeTTLNanoseconds
-        let currentPhase = nowNanoseconds % cmuxTopNegativeScopeTTLNanoseconds
+        let phase = mixed % ttlNanoseconds
+        let currentPhase = nowNanoseconds % ttlNanoseconds
         let delta = phase > currentPhase
             ? phase - currentPhase
-            : cmuxTopNegativeScopeTTLNanoseconds - (currentPhase - phase)
+            : ttlNanoseconds - (currentPhase - phase)
         return nowNanoseconds &+ delta
     }
 

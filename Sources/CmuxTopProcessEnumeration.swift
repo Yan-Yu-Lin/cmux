@@ -12,6 +12,7 @@ extension CmuxTopProcessSnapshot {
             from: bsdInfo,
             includeProcessDetails: false,
             includeCMUXScope: false,
+            negativeScopeTTLNanoseconds: cmuxTopNegativeScopeTTLNanoseconds,
             sampledAtNanoseconds: cpuSampleClockNanoseconds(),
             currentCPUSamples: &cpuSamples
         )?.info
@@ -32,6 +33,9 @@ extension CmuxTopProcessSnapshot {
         }
 
         let sampledAtNanoseconds = cpuSampleClockNanoseconds()
+        let scopeNegativeTTLNanoseconds = negativeScopeTTLNanoseconds(
+            processCount: sampledProcesses.count
+        )
         var activeScopeKeys: Set<CmuxTopProcessScopeCacheKey> = []
         activeScopeKeys.reserveCapacity(sampledProcesses.count)
         var scopeByPID: [Int: CmuxTopProcessScope] = [:]
@@ -47,7 +51,8 @@ extension CmuxTopProcessSnapshot {
             if let scope = cachedCMUXScope(
                 for: pid,
                 cacheKey: cacheKey,
-                nowNanoseconds: sampledAtNanoseconds
+                nowNanoseconds: sampledAtNanoseconds,
+                negativeTTLNanoseconds: scopeNegativeTTLNanoseconds
             ) {
                 scopeByPID[pid] = scope
             }
@@ -90,6 +95,9 @@ extension CmuxTopProcessSnapshot {
 
         let includesCMUXScope = !cmuxSurfaceIDs.isEmpty
         let sampledAtNanoseconds = cpuSampleClockNanoseconds()
+        let scopeNegativeTTLNanoseconds = negativeScopeTTLNanoseconds(
+            processCount: sampledProcesses.count
+        )
         var activeScopeKeys: Set<CmuxTopProcessScopeCacheKey> = []
         var scopeByPID: [Int: CmuxTopProcessScope] = [:]
         var parentPIDByPID: [Int: Int] = [:]
@@ -112,7 +120,8 @@ extension CmuxTopProcessSnapshot {
             if let scope = cachedCMUXScope(
                 for: pid,
                 cacheKey: cacheKey,
-                nowNanoseconds: sampledAtNanoseconds
+                nowNanoseconds: sampledAtNanoseconds,
+                negativeTTLNanoseconds: scopeNegativeTTLNanoseconds
             ) {
                 scopeByPID[pid] = scope
                 if let surfaceID = scope.surfaceID,
@@ -183,6 +192,9 @@ extension CmuxTopProcessSnapshot {
             parentScopeKeys[key] = parentKey
         }
         let sampledAtNanoseconds = cpuSampleClockNanoseconds()
+        let scopeNegativeTTLNanoseconds = negativeScopeTTLNanoseconds(
+            processCount: sampledProcesses.count
+        )
         var currentCPUSamples: [CmuxTopProcessScopeCacheKey: CmuxTopProcessCPUSample] = [:]
         var processRecords: [(info: CmuxTopProcessInfo, cpuSampleKey: CmuxTopProcessScopeCacheKey?)] = []
         processRecords.reserveCapacity(sampledProcesses.count)
@@ -191,6 +203,7 @@ extension CmuxTopProcessSnapshot {
                 from: process,
                 includeProcessDetails: includeProcessDetails,
                 includeCMUXScope: includeCMUXScope,
+                negativeScopeTTLNanoseconds: scopeNegativeTTLNanoseconds,
                 sampledAtNanoseconds: sampledAtNanoseconds,
                 currentCPUSamples: &currentCPUSamples
             ) else {
@@ -331,6 +344,7 @@ extension CmuxTopProcessSnapshot {
         from bsdInfo: proc_bsdinfo,
         includeProcessDetails: Bool,
         includeCMUXScope: Bool,
+        negativeScopeTTLNanoseconds: UInt64,
         sampledAtNanoseconds: UInt64,
         currentCPUSamples: inout [CmuxTopProcessScopeCacheKey: CmuxTopProcessCPUSample]
     ) -> (info: CmuxTopProcessInfo, cpuSampleKey: CmuxTopProcessScopeCacheKey?)? {
@@ -346,7 +360,12 @@ extension CmuxTopProcessSnapshot {
         let rawTTY = Int64(bsdInfo.e_tdev)
         let ttyDevice = rawTTY > 0 ? rawTTY : nil
         let cmuxScope = includeCMUXScope
-            ? cachedCMUXScope(for: pid, cacheKey: cacheKey, nowNanoseconds: sampledAtNanoseconds)
+            ? cachedCMUXScope(
+                for: pid,
+                cacheKey: cacheKey,
+                nowNanoseconds: sampledAtNanoseconds,
+                negativeTTLNanoseconds: negativeScopeTTLNanoseconds
+            )
             : nil
         let rawProcessGroupID = Int(bsdInfo.pbi_pgid)
         let processGroupID = rawProcessGroupID > 0 ? rawProcessGroupID : nil
