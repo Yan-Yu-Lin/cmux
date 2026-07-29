@@ -1442,6 +1442,63 @@
               "minimum": 1,
               "type": "integer"
             },
+            "swipeActionForegroundColor": {
+              "default": null,
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "const": "system"
+                    },
+                    {
+                      "pattern": "^#[0-9A-Fa-f]{6}$"
+                    }
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "swipeLeftBackgroundColor": {
+              "default": null,
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "const": "system"
+                    },
+                    {
+                      "pattern": "^#[0-9A-Fa-f]{6}$"
+                    }
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "swipeRightBackgroundColor": {
+              "default": null,
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "const": "system"
+                    },
+                    {
+                      "pattern": "^#[0-9A-Fa-f]{6}$"
+                    }
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
             "syntheticNotchHorizontalPosition": {
               "default": 0.5,
               "maximum": 1,
@@ -1478,6 +1535,61 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1
+          }
+        },
+        "dynamicNotchDisplaySizes": {
+          "descriptionKey": "schemaDescriptions.notifications.dynamicNotchDisplaySizes",
+          "description": "Override the expanded Dynamic Notch viewport size per display. Keys are stable display keys reported by `cmux dynamic-notch status`.",
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["width", "height"],
+            "properties": {
+              "width": {
+                "type": "number",
+                "minimum": 300,
+                "maximum": 1200
+              },
+              "height": {
+                "type": "number",
+                "minimum": 160,
+                "maximum": 1400
+              }
+            }
+          }
+        },
+        "dynamicNotchSwipeActions": {
+          "descriptionKey": "schemaDescriptions.notifications.dynamicNotchSwipeActions",
+          "description": "Choose the completed left and right swipe action for runtime notification, Feed, and unread rows.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["notification", "feed", "unread"],
+          "default": {
+            "notification": {
+              "left": "dismiss",
+              "right": "open"
+            },
+            "feed": {
+              "left": "hide",
+              "right": "open"
+            },
+            "unread": {
+              "left": "markRead",
+              "right": "open"
+            }
+          },
+          "properties": {
+            "notification": {
+              "$ref": "#/$defs/dynamicNotchSwipeDirections"
+            },
+            "feed": {
+              "$ref": "#/$defs/dynamicNotchSwipeDirections"
+            },
+            "unread": {
+              "$ref": "#/$defs/dynamicNotchSwipeDirections"
+            }
           }
         },
         "dockBadge": {
@@ -2412,6 +2524,21 @@
           "type": "null"
         }
       ]
+    },
+    "dynamicNotchSwipeDirections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left", "right"],
+      "properties": {
+        "left": {
+          "type": "string",
+          "enum": ["none", "dismiss", "hide", "markRead", "open"]
+        },
+        "right": {
+          "type": "string",
+          "enum": ["none", "dismiss", "hide", "markRead", "open"]
+        }
+      }
     },
     "shortcutBinding": {
       "oneOf": [

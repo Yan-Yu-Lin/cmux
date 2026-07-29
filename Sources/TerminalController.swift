@@ -2526,6 +2526,7 @@ class TerminalController {
             "notification.jump_to_unread",
             "notification.dynamic_notch.settings",
             "notification.dynamic_notch.configure",
+            "notification.dynamic_notch.present",
             "app.focus_override.set",
             "app.simulate_active",
             "file.open",

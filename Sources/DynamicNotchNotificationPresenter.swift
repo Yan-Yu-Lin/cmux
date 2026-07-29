@@ -1,4 +1,6 @@
 import AppKit
+import CMUXAgentLaunch
+import Combine
 import CmuxSettings
 import DynamicNotchKit
 import Foundation
@@ -95,7 +97,7 @@ private final class DynamicNotchEscapeMonitor {
 /// interactive Dynamic Notch surface on every connected display.
 @MainActor
 final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
-    static let windowIdentifier = "cmux.dynamicNotchNotification"
+    nonisolated static let windowIdentifier = "cmux.dynamicNotchNotification"
 
     typealias Sleep = @Sendable (Duration) async throws -> Void
     private typealias Notch = DynamicNotch<
@@ -133,6 +135,7 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         var pointerMonitor: DynamicNotchPointerMonitor?
         var escapeMonitor: DynamicNotchEscapeMonitor?
         var timeoutTasks: [UUID: Task<Void, Never>] = [:]
+        var commandedPhases: [String: DynamicNotchNotificationPhase] = [:]
 
         init(model: DynamicNotchNotificationTrayModel) {
             self.model = model
@@ -153,9 +156,12 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
 
     private let openNotification: (TerminalNotification) -> Void
     private let markRead: (UUID) -> Void
+    private let dismissNotification: (UUID) -> Void
     private let sleep: Sleep
     private let appearanceProvider: () -> DynamicNotchAppearance
     private let displayPositionsProvider: () -> [String: String]
+    private let displaySizesProvider: () -> [String: String]
+    private let swipeActionsProvider: () -> DynamicNotchSwipeActions
     private let deliveryModeProvider: () -> NotificationDeliveryMode
     private let screensProvider: () -> [NSScreen]
     private let notificationCenter: NotificationCenter
@@ -163,6 +169,15 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
     private var screenObserver: NSObjectProtocol?
     private var activePresentation: ActivePresentation?
     private var dismissalTransitions: [UUID: Task<Void, Never>] = [:]
+    private var notificationCancellable: AnyCancellable?
+    private var latestFeedItems: [WorkstreamItem] = []
+    private var latestUnreadNotifications: [TerminalNotification] = []
+    private var didReceiveFeedSnapshot = false
+    private var isStarted = false
+    private lazy var feedObserver = DynamicNotchFeedObserver {
+        [weak self] items in
+        self?.feedItemsDidChange(items)
+    }
     #if DEBUG
         private var debugPhaseOverride: DynamicNotchNotificationPhase?
     #endif
@@ -170,6 +185,7 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
     init(
         openNotification: @escaping (TerminalNotification) -> Void,
         markRead: @escaping (UUID) -> Void,
+        dismissNotification: @escaping (UUID) -> Void = { _ in },
         sleep: @escaping Sleep = { duration in
             try await Task.sleep(for: duration)
         },
@@ -182,8 +198,21 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
             UserDefaultsSettingsClient(defaults: .standard).value(
                 for: SettingCatalog().notifications
                     .dynamicNotchDisplayPositions
+                )
+        },
+        displaySizesProvider: @escaping () -> [String: String] = {
+            UserDefaultsSettingsClient(defaults: .standard).value(
+                for: SettingCatalog().notifications
+                    .dynamicNotchDisplaySizes
             )
         },
+        swipeActionsProvider:
+            @escaping () -> DynamicNotchSwipeActions = {
+                UserDefaultsSettingsClient(defaults: .standard).value(
+                    for: SettingCatalog().notifications
+                        .dynamicNotchSwipeActions
+                )
+            },
         deliveryModeProvider: @escaping () -> NotificationDeliveryMode = {
             UserDefaultsSettingsClient(defaults: .standard).value(
                 for: SettingCatalog().notifications.delivery
@@ -194,9 +223,12 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
     ) {
         self.openNotification = openNotification
         self.markRead = markRead
+        self.dismissNotification = dismissNotification
         self.sleep = sleep
         self.appearanceProvider = appearanceProvider
         self.displayPositionsProvider = displayPositionsProvider
+        self.displaySizesProvider = displaySizesProvider
+        self.swipeActionsProvider = swipeActionsProvider
         self.deliveryModeProvider = deliveryModeProvider
         self.screensProvider = screensProvider
         self.notificationCenter = notificationCenter
@@ -230,6 +262,36 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         }
     }
 
+    func start() {
+        guard !isStarted else { return }
+        isStarted = true
+        latestUnreadNotifications =
+            TerminalNotificationStore.shared.notifications.filter {
+                !$0.isRead
+            }
+        notificationCancellable =
+            TerminalNotificationStore.shared.$notifications
+                .sink { [weak self] notifications in
+                    Task { @MainActor [weak self] in
+                        self?.unreadNotificationsDidChange(
+                            notifications
+                        )
+                    }
+                }
+        feedObserver.start()
+        if deliveryModeProvider() == .dynamicNotch {
+            let activePresentation = ensureActivePresentation()
+            synchronizeBuiltInContent(
+                in: activePresentation,
+                revealNewFeedItems: false
+            )
+            handlePointerMoved(
+                NSEvent.mouseLocation,
+                in: activePresentation
+            )
+        }
+    }
+
     func apply(_ mutation: DynamicNotchNotificationMutation) {
         switch mutation {
         case .upsert(let notification):
@@ -247,31 +309,109 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         resolve(id: id, responseAction: responseAction, values: [:])
     }
 
-    private func upsert(_ notification: TerminalNotification) {
-        if let activePresentation {
-            let duration = Double(
-                activePresentation.model.appearance(for: notification)
-                    .dimension(.animationDuration)
-            )
-            activePresentation.model.upsert(notification)
-            for display in activePresentation.displays.values {
-                withAnimation(.snappy(duration: duration)) {
-                    display.model.upsert(notification)
-                }
-            }
-            reconcileDisplays(in: activePresentation, revealNewDisplays: false)
-            synchronizeAppearance(in: activePresentation)
-            scheduleTimeout(for: notification, in: activePresentation)
-            for display in activePresentation.displays.values {
-                revealForArrival(display, in: activePresentation)
-            }
-            return
-        }
-
-        let canonicalModel = DynamicNotchNotificationTrayModel(
-            globalAppearance: appearanceProvider()
+    /// Controls the same per-display presentation used by hover and the
+    /// command palette. `auto` returns the selected displays to pointer-driven
+    /// behavior; other phases remain pinned until `auto` or Escape.
+    func setPresentation(
+        phase rawPhase: String,
+        section rawSection: String?,
+        displayKey: String?
+    ) -> Bool {
+        guard deliveryModeProvider() == .dynamicNotch else { return false }
+        let phase = presentationPhase(rawPhase)
+        guard rawPhase == "auto" || phase != nil else { return false }
+        let section = rawSection.flatMap(
+            DynamicNotchTraySection.init(rawValue:)
         )
-        canonicalModel.upsert(notification)
+        guard rawSection == nil || section != nil else { return false }
+
+        let activePresentation = ensureActivePresentation()
+        synchronizeBuiltInContent(
+            in: activePresentation,
+            revealNewFeedItems: false
+        )
+        let displays = activePresentation.displays.values.filter {
+            displayKey == nil || $0.displayKey == displayKey
+        }
+        guard !displays.isEmpty else { return false }
+
+        if displayKey == nil, let section {
+            activePresentation.model.setSelectedSection(section)
+        }
+        for display in displays {
+            if let section {
+                display.model.setSelectedSection(section)
+            }
+            if let phase {
+                activePresentation.commandedPhases[
+                    display.displayKey
+                ] = phase
+                transition(
+                    to: phase,
+                    on: display,
+                    in: activePresentation
+                )
+            } else {
+                activePresentation.commandedPhases[
+                    display.displayKey
+                ] = nil
+            }
+        }
+        if phase == nil {
+            handlePointerMoved(
+                NSEvent.mouseLocation,
+                in: activePresentation
+            )
+        }
+        return true
+    }
+
+    private func presentationPhase(
+        _ rawPhase: String
+    ) -> DynamicNotchNotificationPhase? {
+        switch rawPhase {
+        case "retracted":
+            .retracted
+        case "compact":
+            .compact
+        case "expanded":
+            .expanded
+        default:
+            nil
+        }
+    }
+
+    private func upsert(_ notification: TerminalNotification) {
+        let activePresentation = ensureActivePresentation()
+        let duration = Double(
+            activePresentation.model.appearance(for: notification)
+                .dimension(.animationDuration)
+        )
+        activePresentation.model.upsert(notification)
+        for display in activePresentation.displays.values {
+            withAnimation(.snappy(duration: duration)) {
+                display.model.upsert(notification)
+            }
+        }
+        reconcileDisplays(in: activePresentation, revealNewDisplays: false)
+        synchronizeAppearance(in: activePresentation)
+        scheduleTimeout(for: notification, in: activePresentation)
+        for display in activePresentation.displays.values {
+            revealForArrival(display, in: activePresentation)
+        }
+    }
+
+    private func ensureActivePresentation() -> ActivePresentation {
+        if let activePresentation {
+            return activePresentation
+        }
+        let keepsDefaultIslandVisible =
+            deliveryModeProvider() == .dynamicNotch
+        let canonicalModel = DynamicNotchNotificationTrayModel(
+            globalAppearance: appearanceProvider(),
+            swipeActions: swipeActionsProvider(),
+            keepsDefaultIslandVisible: keepsDefaultIslandVisible
+        )
         let activePresentation = ActivePresentation(model: canonicalModel)
         self.activePresentation = activePresentation
 
@@ -292,9 +432,80 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         escapeMonitor.start()
 
         reconcileDisplays(in: activePresentation, revealNewDisplays: false)
-        scheduleTimeout(for: notification, in: activePresentation)
+        synchronizeBuiltInContent(
+            in: activePresentation,
+            revealNewFeedItems: false
+        )
+        return activePresentation
+    }
+
+    private func feedItemsDidChange(_ items: [WorkstreamItem]) {
+        let previousPendingIDs = Set(
+            latestFeedItems.lazy.filter(\.status.isPending).map(\.id)
+        )
+        let nextPendingIDs = Set(
+            items.lazy.filter(\.status.isPending).map(\.id)
+        )
+        let shouldReveal = didReceiveFeedSnapshot
+            && !nextPendingIDs.subtracting(previousPendingIDs).isEmpty
+        didReceiveFeedSnapshot = true
+        latestFeedItems = items
+        guard deliveryModeProvider() == .dynamicNotch else { return }
+        let activePresentation = ensureActivePresentation()
+        synchronizeBuiltInContent(
+            in: activePresentation,
+            revealNewFeedItems: shouldReveal
+        )
+    }
+
+    private func unreadNotificationsDidChange(
+        _ notifications: [TerminalNotification]
+    ) {
+        latestUnreadNotifications = notifications.filter { !$0.isRead }
+        guard deliveryModeProvider() == .dynamicNotch,
+            let activePresentation else {
+            return
+        }
+        synchronizeBuiltInContent(
+            in: activePresentation,
+            revealNewFeedItems: false
+        )
+    }
+
+    private func synchronizeBuiltInContent(
+        in activePresentation: ActivePresentation,
+        revealNewFeedItems: Bool
+    ) {
+        guard self.activePresentation === activePresentation else { return }
+        let keepsDefaultIslandVisible =
+            deliveryModeProvider() == .dynamicNotch
+        let feedItems = keepsDefaultIslandVisible ? latestFeedItems : []
+        let unreadNotifications = keepsDefaultIslandVisible
+            ? latestUnreadNotifications
+            : []
+        activePresentation.model.setKeepsDefaultIslandVisible(
+            keepsDefaultIslandVisible
+        )
+        activePresentation.model.setSwipeActions(swipeActionsProvider())
+        activePresentation.model.setFeedItems(feedItems)
+        activePresentation.model.setUnreadNotifications(
+            unreadNotifications
+        )
         for display in activePresentation.displays.values {
-            revealForArrival(display, in: activePresentation)
+            display.model.setKeepsDefaultIslandVisible(
+                keepsDefaultIslandVisible
+            )
+            display.model.setSwipeActions(swipeActionsProvider())
+            display.model.setFeedItems(feedItems)
+            display.model.setUnreadNotifications(unreadNotifications)
+        }
+        if revealNewFeedItems {
+            for display in activePresentation.displays.values {
+                revealForArrival(display, in: activePresentation)
+            }
+        }
+        if !activePresentation.model.isAvailable {
+            close(activePresentation)
         }
     }
 
@@ -305,25 +516,89 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         let displayKey = screen.cmuxDynamicNotchDisplayKey
         let model = DynamicNotchNotificationTrayModel(
             globalAppearance: appearanceProvider(),
-            displayHorizontalPosition: displayPosition(for: displayKey)
+            displayHorizontalPosition: displayPosition(for: displayKey),
+            displayExpandedSize: displaySize(
+                for: displayKey,
+                on: screen
+            ),
+            maximumExpandedSize: maximumDisplaySize(on: screen),
+            swipeActions: swipeActionsProvider(),
+            keepsDefaultIslandVisible:
+                activePresentation.model.keepsDefaultIslandVisible
         )
         for notification in activePresentation.model.notifications.reversed() {
             model.enqueue(notification)
         }
+        model.setFeedItems(
+            Array(activePresentation.model.feedItems.reversed())
+        )
+        model.setUnreadNotifications(
+            activePresentation.model.unreadNotifications
+        )
 
         let notch = DynamicNotch(
             hoverBehavior: [.keepVisible],
             style: .notch,
-            chrome: model.trayAppearance.dynamicNotchChrome
+            chrome: model.trayAppearance.dynamicNotchChrome(
+                expandedWidthOverride: CGFloat(
+                    model.resolvedExpandedWidth
+                ),
+                expandedHeightOverride: CGFloat(
+                    model.resolvedExpandedHeight
+                )
+            )
         ) {
             DynamicNotchNotificationTrayView(
                 model: model,
-                performAction: {
+                performNotificationAction: {
                     [weak self] action, values, selectedNotification in
                     self?.handleAction(
                         action,
                         values: values,
                         for: selectedNotification
+                    )
+                },
+                performFeedAction: {
+                    [weak self] action, item in
+                    self?.handleFeedAction(action, for: item)
+                },
+                performUnreadAction: {
+                    [weak self] action, notification in
+                    self?.handleUnreadAction(
+                        action,
+                        for: notification
+                    )
+                },
+                resizeChanged: {
+                    [weak self, weak activePresentation] size in
+                    guard let self,
+                        let activePresentation,
+                        let display = activePresentation.displays[
+                            displayKey
+                        ] else {
+                        return
+                    }
+                    self.resize(
+                        size,
+                        on: display,
+                        in: activePresentation,
+                        persist: false
+                    )
+                },
+                resizeEnded: {
+                    [weak self, weak activePresentation] size in
+                    guard let self,
+                        let activePresentation,
+                        let display = activePresentation.displays[
+                            displayKey
+                        ] else {
+                        return
+                    }
+                    self.resize(
+                        size,
+                        on: display,
+                        in: activePresentation,
+                        persist: true
                     )
                 }
             )
@@ -395,8 +670,26 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
                 display.model.setDisplayHorizontalPosition(
                     displayPosition(for: displayKey)
                 )
+                display.model.setDisplayExpandedSize(
+                    displaySize(for: displayKey, on: screen)
+                )
+                display.model.setMaximumExpandedSize(
+                    maximumDisplaySize(on: screen)
+                )
+                display.model.setSwipeActions(swipeActionsProvider())
+                display.model.setKeepsDefaultIslandVisible(
+                    activePresentation.model.keepsDefaultIslandVisible
+                )
                 synchronizeAppearance(for: display)
                 display.notch.refreshScreenGeometry(on: screen)
+                if let phase =
+                    activePresentation.commandedPhases[displayKey] {
+                    transition(
+                        to: phase,
+                        on: display,
+                        in: activePresentation
+                    )
+                }
                 continue
             }
 
@@ -417,6 +710,19 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
             #endif
             if revealNewDisplays {
                 revealForArrival(display, in: activePresentation)
+            } else {
+                transition(
+                    to: idlePhase(
+                        isPointerNearby: isPointer(
+                            NSEvent.mouseLocation,
+                            near: screen,
+                            appearance: display.model.trayAppearance
+                        ),
+                        appearance: display.model.trayAppearance
+                    ),
+                    on: display,
+                    in: activePresentation
+                )
             }
         }
     }
@@ -504,6 +810,15 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         #endif
         guard self.activePresentation === activePresentation else { return }
         for display in activePresentation.displays.values {
+            if let phase =
+                activePresentation.commandedPhases[display.displayKey] {
+                transition(
+                    to: phase,
+                    on: display,
+                    in: activePresentation
+                )
+                continue
+            }
             guard !display.notch.isHovering else { continue }
             if display.arrivalRetractionTask != nil {
                 transition(to: .compact, on: display, in: activePresentation)
@@ -531,6 +846,11 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         in activePresentation: ActivePresentation
     ) {
         guard isActive(display, in: activePresentation) else { return }
+        guard
+            activePresentation.commandedPhases[display.displayKey] == nil
+        else {
+            return
+        }
         #if DEBUG
             if debugPhaseOverride != nil {
                 return
@@ -540,7 +860,7 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
             transition(to: .expanded, on: display, in: activePresentation)
             if display.model.notifications.contains(
                 where: { !$0.presentation.inputs.isEmpty }
-            ) {
+            ) || !display.model.feedItems.isEmpty {
                 display.notch.windowController?.window?.makeKey()
             }
         } else {
@@ -567,6 +887,9 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         #endif
         let point = NSEvent.mouseLocation
         for display in expandedDisplays {
+            activePresentation.commandedPhases[
+                display.displayKey
+            ] = nil
             display.arrivalRetractionTask?.cancel()
             display.arrivalRetractionTask = nil
             let appearance = display.model.trayAppearance
@@ -624,7 +947,7 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         in activePresentation: ActivePresentation
     ) {
         guard isActive(display, in: activePresentation),
-            !display.model.notifications.isEmpty
+            display.model.isAvailable
         else {
             return
         }
@@ -711,9 +1034,64 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         case "open":
             openNotification(resolvedNotification)
         case "dismiss":
+            dismissNotification(resolvedNotification.id)
+        case "hide":
             break
+        case "markRead", "mark-read":
+            markRead(resolvedNotification.id)
         default:
             markRead(resolvedNotification.id)
+        }
+    }
+
+    private func handleFeedAction(
+        _ action: String,
+        for item: WorkstreamItem
+    ) {
+        switch action {
+        case "open":
+            _ = FeedCoordinator.shared.focusIfPossible(
+                workstreamId: item.workstreamId
+            )
+        case "dismiss", "hide", "markRead", "mark-read":
+            guard let activePresentation else { return }
+            activePresentation.model.hideFeedItem(id: item.id)
+            for display in activePresentation.displays.values {
+                withAnimation {
+                    display.model.hideFeedItem(id: item.id)
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private func handleUnreadAction(
+        _ action: String,
+        for notification: TerminalNotification
+    ) {
+        switch action {
+        case "open":
+            openNotification(notification)
+            markRead(notification.id)
+        case "markRead", "mark-read":
+            markRead(notification.id)
+        case "dismiss":
+            dismissNotification(notification.id)
+        case "hide":
+            guard let activePresentation else { return }
+            activePresentation.model.hideUnreadNotification(
+                id: notification.id
+            )
+            for display in activePresentation.displays.values {
+                withAnimation {
+                    display.model.hideUnreadNotification(
+                        id: notification.id
+                    )
+                }
+            }
+        default:
+            break
         }
     }
 
@@ -739,7 +1117,7 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
             values: values,
             notification: notification
         )
-        if activePresentation.model.notifications.isEmpty {
+        if !activePresentation.model.isAvailable {
             close(activePresentation)
         } else {
             synchronizeAppearance(in: activePresentation)
@@ -769,7 +1147,7 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
                 notification: notification
             )
         }
-        if activePresentation.model.notifications.isEmpty {
+        if !activePresentation.model.isAvailable {
             close(activePresentation)
         } else {
             synchronizeAppearance(in: activePresentation)
@@ -789,7 +1167,20 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
                 notification: notification
             )
         }
-        close(activePresentation)
+        for display in activePresentation.displays.values {
+            withAnimation {
+                _ = display.model.removeAll()
+            }
+        }
+        if activePresentation.model.isAvailable {
+            synchronizeAppearance(in: activePresentation)
+            handlePointerMoved(
+                NSEvent.mouseLocation,
+                in: activePresentation
+            )
+        } else {
+            close(activePresentation)
+        }
     }
 
     private func close(_ activePresentation: ActivePresentation) {
@@ -828,8 +1219,13 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
     }
 
     private func refreshGlobalAppearance() {
+        let usesDefaultIsland =
+            deliveryModeProvider() == .dynamicNotch
+        if usesDefaultIsland, activePresentation == nil {
+            _ = ensureActivePresentation()
+        }
         guard let activePresentation else { return }
-        if deliveryModeProvider() != .dynamicNotch {
+        if !usesDefaultIsland {
             let settingsDeliveredIDs = Set(
                 activePresentation.model.notifications
                     .filter { $0.presentation.delivery == .settings }
@@ -844,6 +1240,11 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
             }
         }
         activePresentation.model.setGlobalAppearance(appearanceProvider())
+        synchronizeBuiltInContent(
+            in: activePresentation,
+            revealNewFeedItems: false
+        )
+        guard self.activePresentation === activePresentation else { return }
         reconcileDisplays(in: activePresentation, revealNewDisplays: false)
         synchronizeAppearance(in: activePresentation)
         handlePointerMoved(NSEvent.mouseLocation, in: activePresentation)
@@ -853,6 +1254,82 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
         DynamicNotchDisplayPositionSettings.position(
             for: displayKey,
             in: displayPositionsProvider()
+        )
+    }
+
+    private func displaySize(
+        for displayKey: String,
+        on screen: NSScreen
+    ) -> DynamicNotchDisplaySize? {
+        guard let stored = DynamicNotchDisplaySizeSettings.size(
+            for: displayKey,
+            in: displaySizesProvider()
+        ) else {
+            return nil
+        }
+        return clampedDisplaySize(
+            CGSize(
+                width: CGFloat(stored.width),
+                height: CGFloat(stored.height)
+            ),
+            on: screen
+        )
+    }
+
+    private func clampedDisplaySize(
+        _ size: CGSize,
+        on screen: NSScreen
+    ) -> DynamicNotchDisplaySize {
+        let maximum = maximumDisplaySize(on: screen)
+        return DynamicNotchDisplaySize.clamped(
+            width: min(Double(size.width), maximum.width),
+            height: min(Double(size.height), maximum.height)
+        )
+    }
+
+    private func maximumDisplaySize(
+        on screen: NSScreen
+    ) -> DynamicNotchDisplaySize {
+        let topReservedHeight = max(
+            screen.safeAreaInsets.top,
+            NSStatusBar.system.thickness
+        )
+        return DynamicNotchDisplaySize.clamped(
+            width: min(
+                DynamicNotchDisplaySize.widthRange.upperBound,
+                Double(screen.frame.width - 40)
+            ),
+            height: min(
+                DynamicNotchDisplaySize.heightRange.upperBound,
+                Double(
+                    screen.frame.height
+                        - topReservedHeight
+                        - 40
+                )
+            )
+        )
+    }
+
+    private func resize(
+        _ size: CGSize,
+        on display: DisplayPresentation,
+        in activePresentation: ActivePresentation,
+        persist: Bool
+    ) {
+        guard isActive(display, in: activePresentation) else { return }
+        let clamped = clampedDisplaySize(size, on: display.screen)
+        display.model.setDisplayExpandedSize(clamped)
+        synchronizeAppearance(for: display)
+        guard persist else { return }
+        let settings = UserDefaultsSettingsClient(defaults: .standard)
+        let key = SettingCatalog().notifications.dynamicNotchDisplaySizes
+        settings.set(
+            DynamicNotchDisplaySizeSettings.setting(
+                clamped,
+                for: display.displayKey,
+                in: settings.value(for: key)
+            ),
+            for: key
         )
     }
 
@@ -883,7 +1360,15 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
     }
 
     private func synchronizeAppearance(for display: DisplayPresentation) {
-        display.notch.chrome = display.model.trayAppearance.dynamicNotchChrome
+        display.notch.chrome =
+            display.model.trayAppearance.dynamicNotchChrome(
+                expandedWidthOverride: CGFloat(
+                    display.model.resolvedExpandedWidth
+                ),
+                expandedHeightOverride: CGFloat(
+                    display.model.resolvedExpandedHeight
+                )
+            )
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -970,8 +1455,16 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
             let window = primary.notch.windowController?.window
             var payload: [String: Any] = [
                 "phase": phaseName(primary.model.phase),
+                "selected_section":
+                    primary.model.selectedSection.rawValue,
                 "notification_count":
                     activePresentation.model.notifications.count,
+                "feed_count":
+                    activePresentation.model.feedItems.count,
+                "unread_count":
+                    activePresentation.model.unreadNotifications.count,
+                "badge_count":
+                    activePresentation.model.badgeCount,
                 "notification_ids":
                     activePresentation.model.notifications.map {
                         $0.id.uuidString
@@ -1010,9 +1503,17 @@ final class DynamicNotchNotificationPresenter: NSObject, NSWindowDelegate {
                 "display_id": display.screen.cmuxDisplayID ?? 0,
                 "display_name": display.screen.localizedName,
                 "phase": phaseName(display.model.phase),
+                "selected_section":
+                    display.model.selectedSection.rawValue,
                 "horizontal_position": Double(position),
                 "has_position_override":
                     display.model.displayHorizontalPosition != nil,
+                "expanded_width":
+                    display.model.resolvedExpandedWidth,
+                "expanded_height":
+                    display.model.resolvedExpandedHeight,
+                "has_size_override":
+                    display.model.displayExpandedSize != nil,
                 "uses_synthetic_notch": display.notch.usesSyntheticNotch,
                 "window_visible": window?.isVisible ?? false,
                 "window_number": window?.windowNumber ?? 0,

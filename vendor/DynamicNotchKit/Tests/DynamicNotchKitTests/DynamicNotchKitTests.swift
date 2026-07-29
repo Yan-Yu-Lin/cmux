@@ -179,6 +179,7 @@ struct DynamicNotchChromeTests {
         #expect(chrome.shadowRadius == nil)
         #expect(chrome.hoverShadowOpacity == nil)
         #expect(chrome.hoverShadowRadius == nil)
+        #expect(chrome.expandedContentSize == nil)
     }
 
     @Test("Callers can disable both regular and hover shadows")
@@ -194,6 +195,18 @@ struct DynamicNotchChromeTests {
         #expect(chrome.shadowRadius == 0)
         #expect(chrome.hoverShadowOpacity == 0)
         #expect(chrome.hoverShadowRadius == 0)
+    }
+
+    @Test("Callers can request a larger screen-bounded panel canvas")
+    func expandedContentSizeIsRetained() {
+        let chrome = DynamicNotchChrome(
+            expandedContentSize: CGSize(width: 900, height: 700)
+        )
+
+        #expect(
+            chrome.expandedContentSize
+                == CGSize(width: 900, height: 700)
+        )
     }
 }
 

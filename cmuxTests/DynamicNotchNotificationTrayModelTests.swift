@@ -1,3 +1,4 @@
+import CMUXAgentLaunch
 import CmuxSettings
 import Foundation
 import Testing
@@ -131,6 +132,85 @@ struct DynamicNotchNotificationTrayModelTests {
         )
     }
 
+    @Test("Persistent island remains available without notification rows")
+    func persistentIslandRemainsAvailable() {
+        let model = DynamicNotchNotificationTrayModel(
+            keepsDefaultIslandVisible: true
+        )
+
+        #expect(model.isAvailable)
+        model.transition(to: .compact)
+        #expect(model.phase == .compact)
+
+        model.setKeepsDefaultIslandVisible(false)
+        #expect(!model.isAvailable)
+        #expect(model.phase == .retracted)
+    }
+
+    @Test("Feed snapshot keeps bounded source rows newest first with stable IDs")
+    func feedSnapshotUsesStableSourceIdentities() {
+        let model = DynamicNotchNotificationTrayModel()
+        let items = (0..<WorkstreamDefaultRingCapacity).map { index in
+            makeFeedItem(index: index)
+        }
+
+        model.setFeedItems(items)
+
+        #expect(model.feedItems.count == WorkstreamDefaultRingCapacity)
+        #expect(model.feedItems.first?.id == items.last?.id)
+        #expect(model.feedItems.last?.id == items.first?.id)
+        #expect(Set(model.feedItems.map(\.id)).count == model.feedItems.count)
+
+        let hiddenID = items[500].id
+        model.hideFeedItem(id: hiddenID)
+        model.setFeedItems(items)
+        #expect(!model.feedItems.contains(where: { $0.id == hiddenID }))
+    }
+
+    @Test("Unread badge deduplicates runtime notifications by stable ID")
+    func unreadBadgeDeduplicatesRuntimeRows() {
+        let model = DynamicNotchNotificationTrayModel(
+            keepsDefaultIslandVisible: true
+        )
+        let shared = makeNotification(title: "Shared")
+        let unreadOnly = makeNotification(title: "Unread only")
+
+        #expect(model.enqueue(shared))
+        model.setUnreadNotifications([shared, unreadOnly])
+
+        #expect(model.feedCount == 1)
+        #expect(model.unreadCount == 2)
+        #expect(model.badgeCount == 2)
+    }
+
+    @Test("Per-display size and swipe settings resolve independently")
+    func displaySizeAndSwipeSettingsResolve() {
+        let size = DynamicNotchDisplaySize(width: 720, height: 640)
+        var swipes = DynamicNotchSwipeActions()
+        swipes = swipes.setting(
+            .hide,
+            for: .notification,
+            direction: .right
+        )
+        let model = DynamicNotchNotificationTrayModel(
+            displayExpandedSize: size,
+            maximumExpandedSize: DynamicNotchDisplaySize(
+                width: 680,
+                height: 600
+            ),
+            swipeActions: swipes
+        )
+
+        #expect(model.resolvedExpandedWidth == 680)
+        #expect(model.resolvedExpandedHeight == 600)
+        #expect(
+            model.swipeActions.action(
+                for: .notification,
+                direction: .right
+            ) == .hide
+        )
+    }
+
     private func makeNotification(
         id: UUID = UUID(),
         title: String,
@@ -150,6 +230,22 @@ struct DynamicNotchNotificationTrayModelTests {
             )
         )
     }
+
+    private func makeFeedItem(index: Int) -> WorkstreamItem {
+        WorkstreamItem(
+            id: UUID(),
+            workstreamId: "workstream-\(index)",
+            source: .codex,
+            kind: .permissionRequest,
+            createdAt: Date(timeIntervalSince1970: Double(index)),
+            payload: .permissionRequest(
+                requestId: "request-\(index)",
+                toolName: "shell",
+                toolInputJSON: "{}",
+                pattern: nil
+            )
+        )
+    }
 }
 
 @Suite("Dynamic Notch appearance settings file", .serialized)
@@ -162,10 +258,16 @@ struct DynamicNotchAppearanceSettingsFileTests {
         let setting = SettingCatalog().notifications.dynamicNotch
         let positionsSetting = SettingCatalog().notifications
             .dynamicNotchDisplayPositions
+        let sizesSetting = SettingCatalog().notifications
+            .dynamicNotchDisplaySizes
+        let swipesSetting = SettingCatalog().notifications
+            .dynamicNotchSwipeActions
         let defaults = UserDefaults.standard
         let keys = [
             setting.userDefaultsKey,
             positionsSetting.userDefaultsKey,
+            sizesSetting.userDefaultsKey,
+            swipesSetting.userDefaultsKey,
             backupsKey,
             importedKey,
         ]
@@ -202,6 +304,26 @@ struct DynamicNotchAppearanceSettingsFileTests {
             },
             "dynamicNotchDisplayPositions": {
               "uuid:external": 0.25
+            },
+            "dynamicNotchDisplaySizes": {
+              "uuid:external": {
+                "width": 720,
+                "height": 640
+              }
+            },
+            "dynamicNotchSwipeActions": {
+              "notification": {
+                "left": "dismiss",
+                "right": "hide"
+              },
+              "feed": {
+                "left": "hide",
+                "right": "open"
+              },
+              "unread": {
+                "left": "markRead",
+                "right": "open"
+              }
             }
           }
         }
@@ -245,6 +367,31 @@ struct DynamicNotchAppearanceSettingsFileTests {
         #expect(
             CmuxSettingsFileStore.supportedSettingsJSONPaths.contains(
                 "notifications.dynamicNotchDisplayPositions"
+            )
+        )
+        #expect(
+            UserDefaultsSettingsClient(defaults: defaults).value(
+                for: sizesSetting
+            ) == ["uuid:external": "720.0,640.0"]
+        )
+        #expect(
+            UserDefaultsSettingsClient(defaults: defaults).value(
+                for: swipesSetting
+            ).action(for: .notification, direction: .right) == .hide
+        )
+        #expect(
+            CmuxSettingsFileStore.supportedSettingsJSONPaths.contains(
+                "notifications.dynamicNotchDisplaySizes"
+            )
+        )
+        #expect(
+            CmuxSettingsFileStore.supportedSettingsJSONPaths.contains(
+                "notifications.dynamicNotchSwipeActions"
+            )
+        )
+        #expect(
+            CmuxSettingsFileStore.defaultTemplate().contains(
+                #""dynamicNotchSwipeActions""#
             )
         )
     }
