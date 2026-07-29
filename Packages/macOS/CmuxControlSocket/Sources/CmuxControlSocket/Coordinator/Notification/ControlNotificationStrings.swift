@@ -35,6 +35,9 @@ public struct ControlNotificationStrings: Sendable, Equatable {
     public let dynamicNotchResetMustBeBoolean: String
     public let dynamicNotchDisplayConfigurationInvalid: String
     public let dynamicNotchConfigurationRequired: String
+    public let dynamicNotchExpandedSizeInvalid: String
+    public let dynamicNotchSwipeConfigurationInvalid: String
+    public let dynamicNotchPresentationInvalid: String
 
     /// Creates the localized message bundle.
     ///
@@ -62,7 +65,10 @@ public struct ControlNotificationStrings: Sendable, Equatable {
         dynamicNotchDisplayKeyInvalid: String,
         dynamicNotchResetMustBeBoolean: String,
         dynamicNotchDisplayConfigurationInvalid: String,
-        dynamicNotchConfigurationRequired: String
+        dynamicNotchConfigurationRequired: String,
+        dynamicNotchExpandedSizeInvalid: String,
+        dynamicNotchSwipeConfigurationInvalid: String,
+        dynamicNotchPresentationInvalid: String
     ) {
         self.invalidPresentation = invalidPresentation
         self.dismissSelectorRequired = dismissSelectorRequired
@@ -85,5 +91,11 @@ public struct ControlNotificationStrings: Sendable, Equatable {
             dynamicNotchDisplayConfigurationInvalid
         self.dynamicNotchConfigurationRequired =
             dynamicNotchConfigurationRequired
+        self.dynamicNotchExpandedSizeInvalid =
+            dynamicNotchExpandedSizeInvalid
+        self.dynamicNotchSwipeConfigurationInvalid =
+            dynamicNotchSwipeConfigurationInvalid
+        self.dynamicNotchPresentationInvalid =
+            dynamicNotchPresentationInvalid
     }
 }

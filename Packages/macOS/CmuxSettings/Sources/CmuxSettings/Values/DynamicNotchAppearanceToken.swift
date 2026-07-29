@@ -54,6 +54,9 @@ public enum DynamicNotchAppearanceToken: String, CaseIterable, Sendable, Hashabl
     case inputBackgroundColor
     case inputTextColor
     case inputBorderColor
+    case swipeLeftBackgroundColor
+    case swipeRightBackgroundColor
+    case swipeActionForegroundColor
 
     case animationDuration
     case arrivalRevealDuration
@@ -95,7 +98,10 @@ public enum DynamicNotchAppearanceToken: String, CaseIterable, Sendable, Hashabl
              .closeButtonColor,
              .inputBackgroundColor,
              .inputTextColor,
-             .inputBorderColor:
+             .inputBorderColor,
+             .swipeLeftBackgroundColor,
+             .swipeRightBackgroundColor,
+             .swipeActionForegroundColor:
             .colors
         case .animationDuration,
              .arrivalRevealDuration,
@@ -213,7 +219,10 @@ public enum DynamicNotchAppearanceToken: String, CaseIterable, Sendable, Hashabl
              .closeButtonColor,
              .inputBackgroundColor,
              .inputTextColor,
-             .inputBorderColor:
+             .inputBorderColor,
+             .swipeLeftBackgroundColor,
+             .swipeRightBackgroundColor,
+             .swipeActionForegroundColor:
             .color
         }
     }
@@ -330,7 +339,10 @@ public enum DynamicNotchAppearanceToken: String, CaseIterable, Sendable, Hashabl
              .closeButtonColor,
              .inputBackgroundColor,
              .inputTextColor,
-             .inputBorderColor:
+             .inputBorderColor,
+             .swipeLeftBackgroundColor,
+             .swipeRightBackgroundColor,
+             .swipeActionForegroundColor:
             .color(.system)
         }
     }

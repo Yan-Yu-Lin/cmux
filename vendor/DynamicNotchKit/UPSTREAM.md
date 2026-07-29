@@ -25,6 +25,9 @@ The local patches:
   inside that synthetic notch, pointer-hover callbacks, display relocation,
   synchronous panel configuration, and status-bar-level panel behavior for
   cmux's persistent notification tray;
+- let callers declare expanded content dimensions so the transparent panel
+  canvas grows beyond upstream's half-screen default without exceeding the
+  target display;
 - allow direct compact/expanded conversion without an intermediate hidden
   state so a single panel can animate rapid notification updates.
 

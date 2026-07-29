@@ -3230,7 +3230,8 @@ struct CMUXCLI {
         "--shell", "--source", "--subtitle", "--surface", "--tab", "--target-pane", "--team",
         "--text", "--timeout", "--timeout-ms", "--title", "--transcript",
         "--turn", "--type", "--url", "--url-contains", "--value", "--window",
-        "--workspace", "--checkpoint", "--checkpoint-id",
+        "--workspace", "--checkpoint", "--checkpoint-id", "--swipe-left",
+        "--swipe-right",
     ]
 
     private func parsePresentationOptions(
@@ -5328,7 +5329,7 @@ struct CMUXCLI {
             let allowedSpecKeys: Set<String> = [
                 "version", "title", "subtitle", "body", "delivery", "icon",
                 "wait", "timeout", "actions", "inputs", "appearance",
-                "workspace", "surface", "window",
+                "swipe_actions", "workspace", "surface", "window",
             ]
             let stringSpecKeys = [
                 "title", "subtitle", "body", "delivery", "icon",
@@ -5342,6 +5343,9 @@ struct CMUXCLI {
                 || (spec["wait"].map { !isJSONBoolean($0) } ?? false)
                 || (spec["timeout"].map { !isJSONNumber($0) } ?? false)
                 || (spec["appearance"].map { !($0 is [String: Any]) } ?? false)
+                || (spec["swipe_actions"].map {
+                    !($0 is [String: Any])
+                } ?? false)
             if hasInvalidSpecShape {
                 throw CLIError(message: String(
                     localized: "cli.notify.error.invalidSpec",
@@ -5370,6 +5374,14 @@ struct CMUXCLI {
                 ))
             }
             let (rawActions, _) = parseRepeatedOption(commandArgs, name: "--action")
+            let directSwipeLeft = optionValue(
+                commandArgs,
+                name: "--swipe-left"
+            )
+            let directSwipeRight = optionValue(
+                commandArgs,
+                name: "--swipe-right"
+            )
             let (rawInputs, _) = parseRepeatedOption(commandArgs, name: "--input")
             let (rawSecureInputs, _) = parseRepeatedOption(commandArgs, name: "--secure-input")
             let (rawStyles, _) = parseRepeatedOption(commandArgs, name: "--style")
@@ -5487,6 +5499,93 @@ struct CMUXCLI {
                 ))
             }
 
+            let customActionIDs = Set(actions.compactMap { $0["id"] })
+            let builtInSwipeActionIDs: Set<String> = [
+                "dismiss", "hide", "markRead", "mark-read", "none", "open",
+            ]
+            let parseSwipeAction: (Any?) throws -> [String: String]? = {
+                rawValue in
+                guard let rawValue else { return nil }
+                let rawID: String
+                let rawTitle: String?
+                if let string = rawValue as? String {
+                    if let separator = string.firstIndex(of: "=") {
+                        rawID = String(string[..<separator])
+                        rawTitle = String(
+                            string[string.index(after: separator)...]
+                        )
+                    } else {
+                        rawID = string
+                        rawTitle = nil
+                    }
+                } else if let object = rawValue as? [String: Any],
+                    Set(object.keys).isSubset(of: ["id", "title"]),
+                    let id = object["id"] as? String,
+                    object["title"] == nil || object["title"] is String
+                {
+                    rawID = id
+                    rawTitle = object["title"] as? String
+                } else {
+                    throw CLIError(
+                        message: String(
+                            localized:
+                                "cli.notify.error.invalidSwipeAction",
+                            defaultValue:
+                                "Invalid swipe action; use a built-in action, an --action id, or id=Label"
+                        )
+                    )
+                }
+                let id = rawID.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                let title = rawTitle?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                guard validControlIdentifier(id),
+                    builtInSwipeActionIDs.contains(id)
+                        || customActionIDs.contains(id),
+                    title?.isEmpty != true,
+                    (title?.count ?? 0) <= 80
+                else {
+                    throw CLIError(
+                        message: String(
+                            localized:
+                                "cli.notify.error.invalidSwipeAction",
+                            defaultValue:
+                                "Invalid swipe action; use a built-in action, an --action id, or id=Label"
+                        )
+                    )
+                }
+                var result = ["id": id]
+                if let title {
+                    result["title"] = title
+                }
+                return result
+            }
+            let specSwipeActions =
+                spec["swipe_actions"] as? [String: Any] ?? [:]
+            guard Set(specSwipeActions.keys)
+                    .isSubset(of: ["left", "right"]) else {
+                throw CLIError(
+                    message: String(
+                        localized: "cli.notify.error.invalidSwipeAction",
+                        defaultValue:
+                            "Invalid swipe action; use a built-in action, an --action id, or id=Label"
+                    )
+                )
+            }
+            var swipeActions: [String: Any] = [:]
+            if let left = try parseSwipeAction(
+                directSwipeLeft ?? specSwipeActions["left"]
+            ) {
+                swipeActions["left"] = left
+            }
+            if let right = try parseSwipeAction(
+                directSwipeRight ?? specSwipeActions["right"]
+            ) {
+                swipeActions["right"] = right
+            }
+
             var inputs: [[String: Any]] = []
             for (rawInput, secure) in rawInputs.map({ ($0, false) }) + rawSecureInputs.map({ ($0, true) }) {
                 guard let separator = rawInput.firstIndex(of: "=") else {
@@ -5578,6 +5677,7 @@ struct CMUXCLI {
             let hasNotchControls = icon != nil
                 || !actions.isEmpty
                 || !inputs.isEmpty
+                || !swipeActions.isEmpty
                 || !appearance.isEmpty
                 || waitsForAction
                 || timeoutRaw != nil
@@ -5590,7 +5690,7 @@ struct CMUXCLI {
                 guard !hasNotchControls else {
                     throw CLIError(message: String(
                         localized: "cli.notify.error.systemControls",
-                        defaultValue: "--icon, --action, --input, --wait, and --timeout require --delivery notch"
+                        defaultValue: "--icon, --action, --input, --swipe-left, --swipe-right, --wait, and --timeout require --delivery notch"
                     ))
                 }
                 delivery = "system"
@@ -5671,6 +5771,9 @@ struct CMUXCLI {
             if let icon { params["icon"] = icon }
             if !actions.isEmpty { params["actions"] = actions }
             if !inputs.isEmpty { params["inputs"] = inputs }
+            if !swipeActions.isEmpty {
+                params["swipe_actions"] = swipeActions
+            }
             if !appearance.isEmpty {
                 params["appearance"] = appearance.foundationJSONObject
             }
@@ -15674,10 +15777,48 @@ struct CMUXCLI {
                 }
               }
             },
+            "swipe_actions": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "left": { "$ref": "#/$defs/swipeAction" },
+                "right": { "$ref": "#/$defs/swipeAction" }
+              }
+            },
             "appearance": \#(appearanceSchema),
             "workspace": { "type": "string" },
             "surface": { "type": "string" },
             "window": { "type": "string" }
+          },
+          "$defs": {
+            "swipeAction": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9._-]+$"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id"],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[A-Za-z0-9._-]+$"
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  }
+                }
+              ]
+            }
           }
         }
         """#
@@ -17297,6 +17438,8 @@ struct CMUXCLI {
               --action <id=Label>    Add an interactive action (repeatable, max 4)
               --input <id=Label>     Add a text field (repeatable, max 4)
               --secure-input <id=Label>   Add a masked text field
+              --swipe-left <action>  Action for a completed left swipe
+              --swipe-right <action> Action for a completed right swipe
               --style <key=value>    Override one appearance token (repeatable)
               --spec <json|@file|->  Load a runtime form from JSON, a file, or stdin
               --print-schema         Print the JSON form schema without connecting to cmux
@@ -17311,6 +17454,7 @@ struct CMUXCLI {
               cmux notify --title "Error" --subtitle "test.swift" --body "Line 42: syntax error"
               cmux notify --surface <uuid> --title "Build done"
               choice=$(cmux notify --delivery notch --title "Deploy?" --action deploy=Deploy --action cancel=Cancel --wait)
+              cmux notify --delivery notch --title "Build done" --swipe-left dismiss --swipe-right open
               cmux notify --print-schema
               cmux notify --spec @approval.json --wait --json
             """)
@@ -36049,7 +36193,7 @@ export default CMUXSessionRestore;
           shortcuts
           disable-browser | enable-browser | browser-status
           agent-hibernation <on|off>
-          dynamic-notch <status|enable|disable|toggle|position|center|reset-position> [value] [--display <id|name|key>]
+          dynamic-notch <status|enable|disable|toggle|show|compact|hide|auto|position|center|reset-position|size|reset-size|swipe|reset-swipe> [arguments] [--display <id|name|key>]
           restore-session
           open <path-or-url>... [--workspace <id|ref|index>] [--surface <id|ref|index>] [--pane <id|ref|index>] [--window <id|ref|index>] [--focus <true|false>] [--no-focus]
           diff [patch-file|-] [--source <unstaged|staged|branch|last-turn>] [--unstaged|--staged|--branch|--last-turn] [--workspace <id|ref|index>] [--surface <id|ref|index>] [--window <id|ref|index>] [--cwd <path>] [--base <ref>] [--focus <true|false>] [--no-focus] [--title <text>] [--layout <split|unified>] [--font-size <points>]
@@ -36134,7 +36278,7 @@ export default CMUXSessionRestore;
           send-key [--workspace <id|ref|index>] [--surface <id|ref|index>] [--window <id|ref|index>] <key>
           send-panel --panel <id|ref|index> [--workspace <id|ref|index>] [--window <id|ref|index>] <text>
           send-key-panel --panel <id|ref|index> [--workspace <id|ref|index>] [--window <id|ref|index>] <key>
-          notify --title <text> [--subtitle <text>] [--body <text>] [--delivery default|system|notch] [--icon <sf-symbol>] [--action <id=Label>] [--input <id=Label>] [--secure-input <id=Label>] [--style <key=value>] [--spec <json|@file|->] [--print-schema] [--wait] [--timeout <seconds>] [--workspace <id|ref|index>] [--surface <id|ref|index>] [--window <id|ref|index>]
+          notify --title <text> [--subtitle <text>] [--body <text>] [--delivery default|system|notch] [--icon <sf-symbol>] [--action <id=Label>] [--input <id=Label>] [--secure-input <id=Label>] [--swipe-left <action>] [--swipe-right <action>] [--style <key=value>] [--spec <json|@file|->] [--print-schema] [--wait] [--timeout <seconds>] [--workspace <id|ref|index>] [--surface <id|ref|index>] [--window <id|ref|index>]
           list-notifications
           dismiss-notification (--id <uuid> | --all-read)
           mark-notification-read (--id <uuid> | --workspace <id|ref|index> [--surface <id|ref|index>] [--window <id|ref|index>] | --all)

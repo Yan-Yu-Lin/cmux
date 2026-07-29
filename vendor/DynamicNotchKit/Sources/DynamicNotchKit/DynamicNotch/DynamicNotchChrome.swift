@@ -30,6 +30,9 @@ public struct DynamicNotchChrome {
     public var syntheticNotchWidth: CGFloat
     public var syntheticNotchSafeAreaWidth: CGFloat?
     public var syntheticNotchHorizontalPosition: CGFloat
+    /// The caller's expanded content size. The panel grows beyond its
+    /// upstream half-screen canvas when needed, while remaining screen-bound.
+    public var expandedContentSize: CGSize?
 
     public init(
         backgroundColor: Color? = nil,
@@ -59,7 +62,8 @@ public struct DynamicNotchChrome {
         notchBottomCornerRadius: CGFloat? = nil,
         syntheticNotchWidth: CGFloat = 164,
         syntheticNotchSafeAreaWidth: CGFloat? = nil,
-        syntheticNotchHorizontalPosition: CGFloat = 0.5
+        syntheticNotchHorizontalPosition: CGFloat = 0.5,
+        expandedContentSize: CGSize? = nil
     ) {
         self.backgroundColor = backgroundColor
         self.backgroundOpacity = backgroundOpacity
@@ -80,5 +84,6 @@ public struct DynamicNotchChrome {
         self.syntheticNotchSafeAreaWidth = syntheticNotchSafeAreaWidth
         self.syntheticNotchHorizontalPosition =
             syntheticNotchHorizontalPosition
+        self.expandedContentSize = expandedContentSize
     }
 }

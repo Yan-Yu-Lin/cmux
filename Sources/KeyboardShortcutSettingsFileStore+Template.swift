@@ -124,6 +124,15 @@ extension CmuxSettingsFileStore {
                             from: SettingCatalog().notifications
                                 .dynamicNotchDisplayPositions.defaultValue
                         ),
+                    "dynamicNotchDisplaySizes":
+                        DynamicNotchDisplaySizeSettings.jsonObject(
+                            from: SettingCatalog().notifications
+                                .dynamicNotchDisplaySizes.defaultValue
+                        ),
+                    "dynamicNotchSwipeActions":
+                        SettingCatalog().notifications
+                            .dynamicNotchSwipeActions.defaultValue
+                            .encodeForJSON(),
                     "dockBadge": NotificationBadgeSettings.defaultDockBadgeEnabled,
                     "showInMenuBar": MenuBarExtraSettings.defaultShowInMenuBar,
                     "unreadPaneRing": NotificationPaneRingSettings.defaultEnabled,

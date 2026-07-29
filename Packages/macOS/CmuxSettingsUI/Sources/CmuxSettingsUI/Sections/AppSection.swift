@@ -47,6 +47,7 @@ public struct AppSection: View {
     @State private var reorder: DefaultsValueModel<Bool>
     @State private var notificationDelivery: DefaultsValueModel<NotificationDeliveryMode>
     @State private var dynamicNotchAppearance: DefaultsValueModel<DynamicNotchAppearance>
+    @State private var dynamicNotchSwipeActions: DefaultsValueModel<DynamicNotchSwipeActions>
     @State private var dockBadge: DefaultsValueModel<Bool>
     @State private var menuBarOnly: DefaultsValueModel<Bool>
     @State private var showInMenuBar: DefaultsValueModel<Bool>
@@ -72,6 +73,7 @@ public struct AppSection: View {
     @State private var languageOverrideTouched = false
     @State private var telemetryAtAppear: Bool?
     @State private var showsDynamicNotchAppearanceEditor = false
+    @State private var showsDynamicNotchSwipeActionsEditor = false
 
     public init(
         defaultsStore: UserDefaultsSettingsStore,
@@ -104,6 +106,7 @@ public struct AppSection: View {
         _reorder = State(initialValue: DefaultsValueModel(store: defaultsStore, key: catalog.app.reorderOnNotification))
         _notificationDelivery = State(initialValue: DefaultsValueModel(store: defaultsStore, key: catalog.notifications.delivery))
         _dynamicNotchAppearance = State(initialValue: DefaultsValueModel(store: defaultsStore, key: catalog.notifications.dynamicNotch))
+        _dynamicNotchSwipeActions = State(initialValue: DefaultsValueModel(store: defaultsStore, key: catalog.notifications.dynamicNotchSwipeActions))
         _dockBadge = State(initialValue: DefaultsValueModel(store: defaultsStore, key: catalog.notifications.dockBadge))
         _menuBarOnly = State(initialValue: DefaultsValueModel(store: defaultsStore, key: catalog.app.menuBarOnly))
         _showInMenuBar = State(initialValue: DefaultsValueModel(store: defaultsStore, key: catalog.notifications.showInMenuBar))
@@ -145,11 +148,16 @@ public struct AppSection: View {
             mainCard
         }
         .task {
-            startSettingsObservation([language, appearance, appIcon, placement, inheritDir, minimalMode, keepWorkspaceOpen, firstClick, focusHistoryIncludesPanesAndTabs, fileDrop, preferredEditor, openSupported, openMarkdown, globalFontMagnification, markdownFontSize, markdownFontFamily, markdownMaxWidth, canvasPaneGap, canvasSnapping, fileEditorWordWrap, iMessage, reorder, notificationDelivery, dynamicNotchAppearance, dockBadge, menuBarOnly, showInMenuBar, paneRing, paneFlash, desktopNotifications, agentPermissionPrompt, agentTurnComplete, agentIdleReminder, soundName, soundCommand, customSoundFile, telemetry, confirmQuit, warnCloseTab, warnCloseX, hideCloseButton, renameSelects, paletteAllSurfaces])
+            startSettingsObservation([language, appearance, appIcon, placement, inheritDir, minimalMode, keepWorkspaceOpen, firstClick, focusHistoryIncludesPanesAndTabs, fileDrop, preferredEditor, openSupported, openMarkdown, globalFontMagnification, markdownFontSize, markdownFontFamily, markdownMaxWidth, canvasPaneGap, canvasSnapping, fileEditorWordWrap, iMessage, reorder, notificationDelivery, dynamicNotchAppearance, dynamicNotchSwipeActions, dockBadge, menuBarOnly, showInMenuBar, paneRing, paneFlash, desktopNotifications, agentPermissionPrompt, agentTurnComplete, agentIdleReminder, soundName, soundCommand, customSoundFile, telemetry, confirmQuit, warnCloseTab, warnCloseX, hideCloseButton, renameSelects, paletteAllSurfaces])
             if languageAtAppear == nil { languageAtAppear = language.current }; if telemetryAtAppear == nil { telemetryAtAppear = telemetry.current }
         }
         .sheet(isPresented: $showsDynamicNotchAppearanceEditor) {
             DynamicNotchAppearanceEditor(model: dynamicNotchAppearance)
+        }
+        .sheet(isPresented: $showsDynamicNotchSwipeActionsEditor) {
+            DynamicNotchSwipeActionsEditor(
+                model: dynamicNotchSwipeActions
+            )
         }
     }
 
@@ -708,6 +716,38 @@ public struct AppSection: View {
                 }
                 .controlSize(.small)
                 .accessibilityIdentifier("SettingsDynamicNotchAppearanceCustomize")
+            }
+
+            SettingsCardDivider()
+            SettingsCardRow(
+                configurationReview: .json(
+                    "notifications.dynamicNotchSwipeActions"
+                ),
+                String(
+                    localized:
+                        "settings.notifications.dynamicNotch.swipe.title",
+                    defaultValue: "Dynamic Notch Swipe Actions"
+                ),
+                subtitle: String(
+                    localized:
+                        "settings.notifications.dynamicNotch.swipe.subtitle",
+                    defaultValue:
+                        "Choose what a completed left or right swipe does for each kind of row."
+                )
+            ) {
+                Button(
+                    String(
+                        localized:
+                            "settings.app.workspaceLayouts.customize",
+                        defaultValue: "Customize…"
+                    )
+                ) {
+                    showsDynamicNotchSwipeActionsEditor = true
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier(
+                    "SettingsDynamicNotchSwipeActionsCustomize"
+                )
             }
 
             SettingsCardDivider()
