@@ -52,6 +52,8 @@ enum VaultHistoryEventKind: String, Codable, CaseIterable, Sendable {
 struct VaultHistorySubject: Hashable, Codable, Sendable {
     var workspaceId: UUID?
     var windowId: UUID?
+    /// Recently-closed record that can restore this workspace or window.
+    var closedItemId: UUID?
     /// Native agent session identifier for `sessionActivity` events.
     var sessionId: String?
     /// `SessionAgent` raw value for `sessionActivity` events.
@@ -62,12 +64,14 @@ struct VaultHistorySubject: Hashable, Codable, Sendable {
     init(
         workspaceId: UUID? = nil,
         windowId: UUID? = nil,
+        closedItemId: UUID? = nil,
         sessionId: String? = nil,
         agent: String? = nil,
         directory: String? = nil
     ) {
         self.workspaceId = workspaceId
         self.windowId = windowId
+        self.closedItemId = closedItemId
         self.sessionId = sessionId
         self.agent = agent
         self.directory = directory

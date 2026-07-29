@@ -16,13 +16,39 @@ final class VaultHistoryTimelineModel {
         }
     }
 
+    var timeRange: VaultHistoryQuery.TimeRange {
+        didSet {
+            guard timeRange != oldValue else { return }
+            defaults.set(timeRange.rawValue, forKey: Self.timeRangeDefaultsKey)
+            regroup()
+        }
+    }
+
+    var sortOrder: VaultHistoryQuery.SortOrder {
+        didSet {
+            guard sortOrder != oldValue else { return }
+            defaults.set(sortOrder.rawValue, forKey: Self.sortOrderDefaultsKey)
+            regroup()
+        }
+    }
+
+    var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            regroup()
+        }
+    }
+
     private(set) var groups: [VaultHistoryGroup] = []
+    private(set) var resumeEntriesByEventId: [String: SessionEntry] = [:]
     private(set) var isLoading = false
     /// True once the first refresh completed, so the empty state does not
     /// flash before anything loaded.
     private(set) var didLoad = false
 
     private static let groupKeyDefaultsKey = "vaultHistory.groupKey"
+    private static let timeRangeDefaultsKey = "vaultHistory.timeRange"
+    private static let sortOrderDefaultsKey = "vaultHistory.sortOrder"
     /// Cap on merged timeline size handed to grouping; both inputs are
     /// already bounded (store retention, session index page caps) — this is
     /// a final guard so the UI never renders an unbounded list.
@@ -36,6 +62,11 @@ final class VaultHistoryTimelineModel {
     private var mergedEvents: [VaultHistoryEvent] = []
     private var refreshTask: Task<Void, Never>?
 
+    var hasActiveFilters: Bool {
+        timeRange != .allTime
+            || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     init(
         log: VaultHistoryEventLog,
         grouper: VaultHistoryGrouper = VaultHistoryGrouper(),
@@ -48,6 +79,10 @@ final class VaultHistoryTimelineModel {
         self.now = now
         self.groupKey = defaults.string(forKey: Self.groupKeyDefaultsKey)
             .flatMap(VaultHistoryGroupKey.init(rawValue:)) ?? .date
+        self.timeRange = defaults.string(forKey: Self.timeRangeDefaultsKey)
+            .flatMap(VaultHistoryQuery.TimeRange.init(rawValue:)) ?? .allTime
+        self.sortOrder = defaults.string(forKey: Self.sortOrderDefaultsKey)
+            .flatMap(VaultHistoryQuery.SortOrder.init(rawValue:)) ?? .newestFirst
     }
 
     /// Reloads persisted events, merges the given session entries, and
@@ -73,13 +108,34 @@ final class VaultHistoryTimelineModel {
                 merged.removeLast(merged.count - Self.maxTimelineEvents)
             }
             self.mergedEvents = merged
+            var resumeEntries: [String: SessionEntry] = [:]
+            for entry in sessionEntries {
+                resumeEntries["session:\(entry.agent.rawValue):\(entry.id)"] = entry
+            }
+            self.resumeEntriesByEventId = resumeEntries
             self.isLoading = false
             self.didLoad = true
             self.regroup()
         }
     }
 
+    func clearFilters() {
+        searchText = ""
+        timeRange = .allTime
+    }
+
     private func regroup() {
-        groups = grouper.groups(events: mergedEvents, by: groupKey, now: now())
+        let currentTime = now()
+        let query = VaultHistoryQuery(
+            timeRange: timeRange,
+            sortOrder: sortOrder,
+            searchText: searchText
+        )
+        groups = grouper.groups(
+            events: mergedEvents,
+            by: groupKey,
+            query: query,
+            now: currentTime
+        )
     }
 }

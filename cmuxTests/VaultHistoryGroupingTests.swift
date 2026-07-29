@@ -26,7 +26,8 @@ import Testing
         title: String = "",
         workspaceId: UUID? = nil,
         windowId: UUID? = nil,
-        agent: String? = nil
+        agent: String? = nil,
+        directory: String? = nil
     ) -> VaultHistoryEvent {
         VaultHistoryEvent(
             id: id,
@@ -37,7 +38,8 @@ import Testing
                 workspaceId: workspaceId,
                 windowId: windowId,
                 sessionId: agent == nil ? nil : "session-\(id)",
-                agent: agent
+                agent: agent,
+                directory: directory
             )
         )
     }
@@ -136,7 +138,33 @@ import Testing
         #expect(groups[0].events.map(\.id) == ["w-close", "w-open"])
     }
 
-    // MARK: - Group by agent and kind
+    // MARK: - Group by directory, agent, and kind
+
+    @Test func directoryGroupingNormalizesPathsAndKeepsUnknownLast() {
+        let grouper = VaultHistoryGrouper(calendar: Self.utcCalendar())
+        let events = [
+            event(
+                id: "repo-old",
+                secondsAgo: 300,
+                title: "old",
+                directory: "/tmp/project/../repo"
+            ),
+            event(
+                id: "repo-new",
+                secondsAgo: 20,
+                title: "new",
+                directory: "/tmp/repo/"
+            ),
+            event(id: "unknown", secondsAgo: 10, title: "unknown"),
+        ]
+
+        let groups = grouper.groups(events: events, by: .directory, now: Self.now)
+
+        #expect(groups.map(\.id) == ["directory:/tmp/repo", VaultHistoryGrouper.otherGroupID])
+        #expect(groups[0].title == "/tmp/repo")
+        #expect(groups[0].events.map(\.id) == ["repo-new", "repo-old"])
+        #expect(groups[1].events.map(\.id) == ["unknown"])
+    }
 
     @Test func agentGroupingSeparatesAgentsFromAppEvents() {
         let grouper = VaultHistoryGrouper(calendar: Self.utcCalendar())
@@ -164,6 +192,73 @@ import Testing
 
         #expect(groups.map(\.id) == ["kind:workspaceCreated", "kind:workspaceClosed"])
         #expect(groups[0].events.map(\.id) == ["c2", "c1"])
+    }
+
+    // MARK: - Filtering, search, and sorting
+
+    @Test func timeRangesUseRollingBoundaries() {
+        let inside24Hours = event(id: "inside-24h", secondsAgo: 24 * 3600 - 1)
+        let outside24Hours = event(id: "outside-24h", secondsAgo: 24 * 3600 + 1)
+        let inside7Days = event(id: "inside-7d", secondsAgo: 7 * 24 * 3600 - 1)
+        let outside7Days = event(id: "outside-7d", secondsAgo: 7 * 24 * 3600 + 1)
+        let events = [outside7Days, inside7Days, outside24Hours, inside24Hours]
+
+        let last24Hours = VaultHistoryQuery(timeRange: .last24Hours)
+            .visibleEvents(from: events, now: Self.now)
+        #expect(last24Hours.map(\.id) == ["inside-24h"])
+
+        let last7Days = VaultHistoryQuery(timeRange: .last7Days)
+            .visibleEvents(from: events, now: Self.now)
+        #expect(last7Days.map(\.id) == ["inside-24h", "outside-24h", "inside-7d"])
+    }
+
+    @Test func searchMatchesEveryTokenAcrossMetadataFields() {
+        let events = [
+            event(
+                id: "matching",
+                secondsAgo: 20,
+                kind: .sessionActivity,
+                title: "Fix restore",
+                agent: "codex",
+                directory: "/Users/me/cmux"
+            ),
+            event(
+                id: "wrong-directory",
+                secondsAgo: 10,
+                kind: .sessionActivity,
+                title: "Fix restore",
+                agent: "codex",
+                directory: "/Users/me/other"
+            ),
+        ]
+        let query = VaultHistoryQuery(searchText: "codex cmux restore")
+
+        #expect(query.visibleEvents(from: events, now: Self.now).map(\.id) == ["matching"])
+    }
+
+    @Test func sortOrdersApplyToRowsAndDateBuckets() {
+        let grouper = VaultHistoryGrouper(calendar: Self.utcCalendar())
+        let events = [
+            event(id: "beta-old", secondsAgo: 40 * 24 * 3600, title: "Beta"),
+            event(id: "zulu-new", secondsAgo: 10, title: "Zulu"),
+            event(id: "alpha-mid", secondsAgo: 25 * 3600, title: "Alpha"),
+        ]
+
+        let oldest = grouper.groups(
+            events: events,
+            by: .date,
+            query: VaultHistoryQuery(sortOrder: .oldestFirst),
+            now: Self.now
+        )
+        #expect(oldest.map(\.id) == [
+            "date:\(VaultHistoryDateBucket.older.rawValue)",
+            "date:\(VaultHistoryDateBucket.yesterday.rawValue)",
+            "date:\(VaultHistoryDateBucket.last24Hours.rawValue)",
+        ])
+
+        let byTitle = VaultHistoryQuery(sortOrder: .titleAscending)
+            .visibleEvents(from: events, now: Self.now)
+        #expect(byTitle.map(\.id) == ["alpha-mid", "beta-old", "zulu-new"])
     }
 
     // MARK: - Session projection
