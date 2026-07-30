@@ -144,3 +144,323 @@ inspector pay nothing.
 - **`pixelScrollActive` requires scrollback to exist** (`total_rows > rows`), so
   a fresh shell with no history scrolls exactly as before. This matches the
   reference.
+
+---
+
+# Phase 1 follow-up: mouse selection misaligned by one row
+
+On-device report: "selection isn't quite aligned with where the text actually
+is", intermittently.
+
+## Root cause — confirmed
+
+Phase 1 taught the *renderer* about the sub-row offset but not the *hit-test*.
+The renderer draws viewport row `y` at buffer row `y + 1` and shifts the whole
+grid up by `pixel_scroll_offset_y` pixels, so in terminal space row `y` occupies
+
+```
+[(y + 1) * cell_h - shift, (y + 2) * cell_h - shift)
+```
+
+Inverting that gives `y = floor((t + shift - cell_h) / cell_h)`.
+`Surface.posToViewport` computed the unshifted `floor(t / cell_h)`, so every
+mouse-derived row was off by `shift - cell_h`, i.e. by exactly the sub-row
+offset. Whenever the offset exceeded nothing at all, cells within that band
+resolved to the row above or below the one drawn there.
+
+This explains the "sometimes": the error is zero exactly when the offset is
+zero, which is the case at the bottom of the scrollback, on the alternate
+screen, with `pixel-scroll` off, and after every viewport jump (all of which
+call `resetPixelScroll`). It only appears while resting partway into scrollback
+after a trackpad scroll.
+
+## Fix
+
+The shift formula was duplicated in the renderer and would now have been
+duplicated a third time in the hit-test, so it moved to one place:
+
+| File:line | What |
+|---|---|
+| `src/renderer/size.zig:227` | new `pixelScrollShift(offset, cell_height)` — the single definition of the visual shift, with the phase-1 `@round`/`@max(…, 1)` behavior preserved verbatim |
+| `src/renderer/generic.zig:2660` | `pixelScrollUniform` now calls it instead of recomputing |
+| `src/Surface.zig:6923` | new `pixelScrollHitTestShift` — returns `shift - cell_h`, the correction to add to a surface-space y |
+| `src/Surface.zig:6896` | `posToViewport` applies it |
+| `src/Surface.zig:5587` | `mouseReport` applies it too (see below) |
+| `src/renderer.zig:15` | `size` made `pub` so `Surface` can reach the helper |
+
+`posToViewport` is the single chokepoint for everything the bug report covers:
+click, drag, drag-autoscroll (`selectionScrollTick`), double-click word select,
+triple-click line select, right-click word select, prompt clicks, quicklook
+(`apprt/embedded.zig`), and cmd-hover link hit-testing (`linkAtPos`,
+`mouseRefreshLinks`) all route through it. Verified by grep that nothing else
+in `src/` or `macos/` calls it, and that no other consumer does its own
+pixel→row math — with one exception.
+
+**The exception is mouse reporting.** `input/mouse_encode.zig` converts pixels
+to cells itself (`posToCell`), so it needed the same correction applied to the
+position handed in. In practice this is almost always a no-op, because mouse
+reporting being on makes `scrollCallback` take the reporting path before
+`pixelScrollActive` is ever consulted, so the offset stays at whatever it was.
+"Whatever it was" is the point: an offset left over from before the TUI enabled
+reporting would otherwise misreport every subsequent event. Corrected for
+symmetry rather than to fix an observed failure.
+
+**No double-correction.** The renderer consumes
+`renderer_state.mouse.pixel_scroll_offset_y` to build the uniform; the hit-test
+reads the same field independently and inverts it. Neither reads the other's
+output, and `posToViewport` results are never fed back into rendering geometry —
+they become terminal pins, which are row-granular by definition.
+
+## Why the at-rest case is unaffected
+
+`pixelScrollHitTestShift` returns `0` on a zero offset via an explicit early
+return, before any arithmetic. At rest `pixelScrollShift(0, h) == h` and the
+correction would be `h - h == 0` anyway, so the early return is an optimization,
+not a special case — but it does guarantee bit-for-bit identical behavior to
+pre-phase-1 for every surface that has never pixel-scrolled. The test
+`pixel scroll hit-testing is unchanged at rest` pins this across all 207 pixel
+rows of a sample surface, comparing against the raw `Coordinate.convert` result.
+
+## Test coverage
+
+5 new tests in `src/renderer/size.zig`:
+
+- 2 on `pixelScrollShift` itself: the at-rest identity, and the `@max(…, 1)`
+  floor near `offset == cell_height` (which the shaders depend on to know the
+  extra rows exist).
+- **`pixel scroll hit-testing agrees with the drawn position`** — the real one.
+  For all 20 sub-row offsets × all 10 rows, it computes where the renderer draws
+  that row and asserts the first and last on-screen pixel of the band hit-tests
+  back to it. This is a round-trip against the drawn geometry, not against a
+  restatement of the fix.
+- the at-rest regression test described above.
+- one pinning the revealed sliver above row 0 to row 0, since viewport
+  coordinates are unsigned and there is no row to name there.
+
+The round-trip test was verified to genuinely fail against the uncorrected
+conversion (`expected 0, found 1` — exactly the one-row misalignment reported)
+rather than passing vacuously.
+
+`zig build test`: **3185/3201 passed, 16 skipped, 0 failed** (+5 from phase 1's
+3180). ReleaseFast universal xcframework rebuilt.
+
+## Not verified
+
+No on-device visual check — same caveat as phase 1. The math is verified by
+round-trip against the renderer's own formula, which is now shared rather than
+restated, so the two can no longer drift; but nobody has dragged a selection
+while scrolled partway into scrollback on a running build.
+
+---
+
+# Phase 2 — animated TUI (alt-screen) scrolling
+
+Branch `pixel-scroll`, 5 more commits on top of phase 1's 5 (`82ac3a26a`
+back to `56061a6f2`).
+
+## What it does
+
+On the alternate screen, a scroll the user made with a wheel or trackpad
+glides into place over ~150ms instead of snapping. A scroll the user made
+with the keyboard (j/k, Ctrl-D, gg) snaps instantly and **cancels any
+glide already in flight**. The primary screen is untouched.
+
+## Files touched
+
+| File | What |
+|---|---|
+| `src/terminal/Screen.zig` (+12) | `scroll_tracker: isize` |
+| `src/terminal/Terminal.zig` (+13) | 5 tracker bumps in the region-scroll paths |
+| `src/terminal/render.zig` (+241) | `scroll_jump_rows`, `scroll_region_top/bottom`, `last_scroll_tracker`, 6 tests |
+| `src/renderer/animation.zig` (new, 526) | `Spring`, `scrollAction` gate, `wheel_recency_window_ns`, 11 tests |
+| `src/renderer.zig` (+2) | export + test reference |
+| `src/renderer/State.zig` (+17) | `Mouse.last_wheel_scroll: ?Instant` |
+| `src/Surface.zig` (+26) | `recordWheelScroll`, called from 2 paths |
+| `src/renderer/generic.zig` (+306) | spring state, `updateScrollAnimation` `:2792`, `stepScrollAnimation` `:2873`, `snapScrollAnimation` `:2913`, `scrollAnimationUniforms` `:2939`, `hasScrollAnimation` `:1221`, 4 snap sites |
+| `src/renderer/Thread.zig` (+64/-20) | `drawTimerShouldRun` `:1019`, arm at `:1592`, disarm in `drawCallback` |
+| `src/renderer/metal/shaders.zig` (+26) | 3 uniforms, layout test extended |
+| `src/renderer/shaders/shaders.metal` (+81) | bg fragment, text vertex + fragment clip, image vertex |
+| `src/renderer/opengl/shaders.zig`, `glsl/common.glsl` (+20) | no-op fields, layout parity only |
+| `src/config/Config.zig` (+21) | `scroll-animation-duration`, `scroll-animation-bounciness` |
+
+## How it works
+
+1. **Jump detection.** `Screen.scroll_tracker` accumulates signed row
+   shifts. Bumped in `insertLines` (+), `deleteLines` (-), `scrollUp`'s
+   scrollback fast path (-), and both region-scroll branches of `index`
+   (-). `reverseIndex` and `scrollDown` are covered transitively through
+   `insertLines`; `scrollUp`'s margin path through `deleteLines`.
+   `RenderState.beginUpdate` publishes the wrapping difference since the
+   previous update as `scroll_jump_rows`, plus the region bounds.
+
+2. **Wheel gate.** `Surface.recordWheelScroll` stamps
+   `renderer_state.mouse.last_wheel_scroll` under the mutex, from both
+   the mouse-reporting path and the alternate-scroll arrow-key path.
+   `animation.scrollAction` decides `glide` / `snap` / `none` from the
+   jump, the region-change flag, the screen, the config, and whether a
+   wheel event landed within 150ms.
+
+3. **Spring.** `updateScrollAnimation` (in `updateFrame`, inside the draw
+   mutex, before `rebuildCells`) folds the jump in: `glide` adds to
+   `spring.position`, `snap` resets. `stepScrollAnimation` (in
+   `drawFrame`) advances it. The offset is in ROWS; the uniform converts
+   to pixels and rounds.
+
+4. **Frame driving.** `Renderer.hasScrollAnimation()` →
+   `Thread.drawTimerShouldRun()` → the existing `draw_h` timer.
+   `renderCallback` arms after each update; `drawCallback` rechecks after
+   each draw and disarms.
+
+5. **Shaders.** `tui_scroll_offset_y` shifts rows inside the region back
+   toward their pre-jump position and decays to zero. Bounds are in cell
+   BUFFER rows (phase 1's `+1`), so the shaders don't re-derive the extra
+   row convention.
+
+## Deviations from the spec, and why
+
+- **`hasAnimations` is not the frame-driving hook; a new
+  `hasScrollAnimation` is.** The spec said to piggyback on the
+  custom-shader mechanism, and the timer is shared, but the *predicate*
+  had to be separate. `Thread.syncDrawTimer` gates `hasAnimations` behind
+  `custom-shader-animation`, which is a preference about decorative
+  shaders — a user who sets it to `false` would have silently lost scroll
+  animation. A glide needs no such gate because it is self-limiting.
+
+- **The spring steps in `drawFrame`, not `updateFrame`.** The spec put
+  the whole thing in `updateFrame`. That only runs when the terminal
+  state changes, and a glide has to keep moving after the application has
+  gone quiet — which is most of the animation. Accumulation stays in
+  `updateFrame` (it needs the render state); only the time step moved.
+
+- **`syncDrawTimer` was split into `drawTimerShouldRun` + the arm.** The
+  original fused arm and disarm into one `skip:` block called from a
+  handful of lifecycle points, so it could arm for a glide but never
+  notice it had ended. `drawCallback` now rechecks the predicate after
+  each draw. This is what makes "zero idle cost" true rather than
+  approximate.
+  *This does not touch the bounded-drain invariants documented in
+  `docs/ghostty-fork.md`:* the mailbox snapshot loop, the post-render
+  re-wake, and external-path continuation consumption are all unchanged.
+  The one added call site is `renderCallback` **after** `drawFrame`,
+  which mirrors the existing `.change_config` precedent at `:1141`.
+
+- **Occlusion snaps the spring** (`setVisible(false)`). Not in the spec's
+  reset list. An invisible surface skips its draws entirely
+  (`Thread.drawFrame`'s `flags.visible` early return), so a glide left in
+  flight would never reach rest: the spring would stay displaced, hold
+  the draw timer armed, and tick at 120Hz producing nothing. This was the
+  only real hole in the idle-cost guarantee.
+
+- **A screen switch is folded into the region-change test** rather than
+  being a separate reset. `RenderState` already reports zero jump across
+  a switch (independent per-screen counters), so the only thing left to
+  do was drop the offset, which the region-change branch already does.
+
+- **The `none` action exists** and is not the same as `snap`. Most frames
+  carry no jump; snapping them would kill every animation after its first
+  frame. The reference implementation gets this right implicitly by
+  guarding on `@abs(jump) >= threshold`; making it an explicit third case
+  is what let the gate be unit tested.
+
+- **The jump is not thresholded.** The reference uses
+  `@abs(scroll_jump_total) >= 1.0`. Our tracker is integral, so any
+  non-zero jump is already at least one row and the threshold is dead
+  code.
+
+- **Images glide but are not clipped** at the region boundary. An image
+  spans many rows, so the region test is about where it starts, and the
+  image fragment shader has no bounds to clip against. Kitty graphics
+  inside an animating alt-screen scroll region are rare enough to accept
+  this; documented in the shader.
+
+- **`CellTextVertexOut` gained an `in_scroll_region` flat bool.** The
+  fragment stage needs to know whether to clip, and unlike the
+  reference's shader ours doesn't already carry `grid_pos` through to the
+  fragment. Passing one flat bool is cheaper than passing the position.
+
+- **OpenGL's region bounds are `u32`, not `u16`.** std140 has no 16-bit
+  integer type. The OpenGL `Uniforms` is matched against the GLSL block,
+  not against the Metal one, so the two can differ here.
+
+## Verification
+
+- `zig build -Demit-macos-app=false`: clean.
+- `zig build test`: **3199/3215 passed, 16 skipped, 0 failed.** 19 new
+  tests (11 animation, 6 jump-tracker, layout test extended, plus the
+  two-piece integration tests for the glide-then-keypress and
+  flick-stacking sequences).
+- Metal uniform offsets re-probed on-device (compiled the MSL struct,
+  read `&field - base` back through a compute kernel). Struct grew
+  144 → 160 bytes; `tui_scroll_offset_y` at 136, bounds at 140/142, bools
+  moved 136 → 144. All pinned.
+- `xcrun metal -c shaders.metal`: compiles.
+- ReleaseFast universal xcframework: **succeeded**, all three slices
+  (`macos-arm64_x86_64`, `ios-arm64`, `ios-arm64-simulator`).
+
+## Not done / known limitations
+
+- **No on-device visual verification.** Same caveat as phase 1, and it
+  matters more here: the text fragment's region clip band and the bg
+  fragment's clamp are the two things most likely to be subtly wrong, and
+  neither is reachable from a unit test. What to watch when dogfooding:
+  scroll nvim with a trackpad and check that (a) the statusline never
+  moves, (b) no sliver of gliding text draws over it, (c) `j` and `k` are
+  as instant as they are today.
+- **Repaints without a region scroll don't animate.** Terminal scroll
+  regions are full-width, so a TUI with vertical splits that repaints
+  each pane rather than scrolling a region produces no jump to detect.
+  This falls back to today's snap behavior, which is correct, just not
+  animated. Same for any application that redraws instead of scrolling.
+- **The gate is per-surface, not per-application.** If an application
+  scrolls its region on its own (a `tail -f`-style live update) within
+  150ms of a user wheel event, that scroll animates too. Harmless in
+  practice — it's a scroll either way — but worth knowing.
+- **`scroll-animation-bounciness` is untested visually.** The zeta
+  mapping (`1 - bounciness * 0.6`) is the reference's, and the spring
+  handles zeta < 1 correctly by construction, but nobody has looked at an
+  underdamped glide running. Default is 0, i.e. critically damped.
+- **OpenGL parity is unverified**, same as phase 1: GTK can't be built on
+  this machine. The three new fields are no-ops there.
+
+## Post-dogfood fix: inverted displacement (`8ffd66897`)
+
+First on-device dogfood: "it moves the entire window and moves it back,
+instead of smooth scrolling."
+
+**Cause.** The spring was displaced BY the jump (`position += jump`)
+instead of against it. By the time the renderer observes a jump the grid
+already holds the post-scroll content; what the user last saw is the
+pre-scroll frame, so the spring has to start at the offset that UNDOES
+the jump and decay to zero. Displacing the same way instead shifts
+content further along its own direction of travel — doubling the visible
+jump — and then springs back. That is exactly a lurch away and a rebound.
+
+**Why it wasn't caught.** Two reasons, both worth recording:
+
+1. **The reference implementation is wrong here, or at least
+   self-contradictory.** `generic.zig:1732` comments "scroll_jump_total
+   > 0 = content moved up", but its own `Terminal.zig:1558` adds on
+   `insertLines`, which moves content DOWN. I had copied the accumulation
+   verbatim on the strength of the comment. The sign is now derived from
+   the shaders instead, where screen-space +Y is down and the grid shift
+   subtracts — a source that can't disagree with itself.
+2. **The two integration tests baked the sign into their literals**
+   (`spring.position += -3`), so they asserted the behavior they were
+   given rather than the behavior required, and passed either way.
+
+**Fix.** `animation.springDisplacement(jump_rows) = -jump_rows`, with the
+derivation in its doc comment. The integration tests now route through it
+and additionally assert the offset never crosses zero, which is the
+property a rebound violates. Verified the new test genuinely fails
+against the old sign (`expected 3, found -3`) rather than passing
+vacuously.
+
+**Not the cause:** region-bounds indexing was checked and is correct. The
+`+1` extra-row adjustment matches phase 1's convention, and for nvim's
+usual full-screen region the clip band resolves to exactly
+`grid_padding.x` at rest. "The entire window" moving was the doubled jump
+of a full-height region, not an unrestricted shift.
+
+- `zig build test` after the fix: **3201/3217 passed, 16 skipped, 0
+  failed** (+2 tests).
+- ReleaseFast universal xcframework: rebuilt, all three slices.
