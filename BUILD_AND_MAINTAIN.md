@@ -8,15 +8,15 @@
 | 位置 | 內容 |
 |---|---|
 | 本目錄(parent repo) | cmux app(Swift)。branch `smooth-scroll`,remote `mine` = github.com/Yan-Yu-Lin/cmux |
-| `ghostty/`(submodule) | 平滑捲動實作。branch `pixel-scroll`(7 commits on 80d7fb35a),remote `mine` = github.com/Yan-Yu-Lin/ghostty |
+| `ghostty/`(submodule) | 平滑捲動實作。branch `pixel-scroll`(7 個功能 commits + 1 個上游 API 遷移 commit，base `f76c132e5`),remote `mine` = github.com/Yan-Yu-Lin/ghostty |
 | `ghostty` branch `archive/phase2-tui-spring` | 已放棄的 phase 2(TUI 彈簧動畫)。失敗原因:alt screen 無 scrollback,捲出的行立即銷毀,無內容可動畫。細節見 PIXEL_SCROLL_IMPL_NOTES.md |
 | `PIXEL_SCROLL_SPEC.md` / `PIXEL_SCROLL_PHASE2_SPEC.md` | 設計規格 |
 | `PIXEL_SCROLL_IMPL_NOTES.md` | 實作筆記(檔案/行號/偏差/教訓) |
 
 ## 工具鏈(必讀)
 
-- **Zig 必須用 0.15.2**:`/opt/homebrew/opt/zig@0.15/bin/zig`。PATH 上的 zig 是 0.16,build 會直接 compile error 擋掉。
-  每次 build 前:`export PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH"`
+- **Zig 必須用 0.16.0**。直接使用 PATH 上的 `zig`；Ghostty 的 `minimum_zig_version` 已升到 0.16.0。
+- `~/.zshenv` 已把 `ZIG_GLOBAL_CACHE_DIR` 放到外接 SSD。`ghostty/.zig-cache` 留在 repo 內是預期行為。
 - Metal toolchain 需已安裝(曾用 `xcodebuild -downloadComponent MetalToolchain` 修過)。
 
 ## 重新建置流程
@@ -24,7 +24,6 @@
 ### 1. 改了 ghostty Zig 碼之後 → 重編 GhosttyKit
 ```bash
 cd ghostty
-export PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH"
 zig build -Demit-macos-app=false          # 快速編譯檢查(迭代用)
 zig build test -Dtest-filter=<name>       # 針對性測試
 zig build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast   # 最終(很慢)
@@ -34,7 +33,6 @@ zig build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=Rele
 
 ### 2. Build app — Debug(開發測試用)
 ```bash
-export PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH"
 ./scripts/reload.sh --tag <tag>     # tag 化 build:獨立 app 名/bundle id/socket,可與正式版並存
 ```
 產物在 `~/Library/Developer/Xcode/DerivedData/cmux-<tag>/Build/Products/Debug/`。
@@ -73,8 +71,9 @@ defaults import com.cmuxterm.app.smooth /tmp/p.plist     # 匯入 Smooth 版
 
 ## 跟上游更新(未來)
 
-1. `cd ghostty && git fetch origin && git rebase origin/main pixel-scroll`(7 個 commits,衝突點多半在
-   render.zig / generic.zig / shaders — 見 IMPL_NOTES 的檔案清單)
+1. 先從 parent 的 `origin/main` 讀出它實際 pin 的 Ghostty SHA，再把 `pixel-scroll` rebase 到該 SHA；
+   **不要直接追 Ghostty absolute tip**。7 個功能 commits 的衝突點多半在 render.zig / generic.zig /
+   shaders，另需留意 Zig `std.Io` mutex API 與 `RenderState.Row` 欄位變動（見 IMPL_NOTES）。
 2. 重編 xcframework → parent repo `git pull` 上游 → 重 build app → 重簽
 3. 推 fork:`git push mine pixel-scroll`(submodule)、parent 提交 submodule pointer 後 `git push mine smooth-scroll`
 

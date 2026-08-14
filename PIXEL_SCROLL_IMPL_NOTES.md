@@ -1,6 +1,31 @@
 # Pixel scroll implementation notes
 
-Branch `pixel-scroll` in the `ghostty` submodule, 4 commits on top of `80d7fb35a`.
+Branch `pixel-scroll` in the `ghostty` submodule. The current head is
+`3234ce204`, based on cmux's pinned Ghostty commit `f76c132e5`. It contains the
+original 7 feature/fix commits plus one current-Ghostty API migration commit.
+
+## 2026-08-15 upstream rebase
+
+- Rebased all 7 pixel-scroll commits from `80d7fb35a` onto the exact Ghostty
+  commit pinned by cmux `origin/main`, `f76c132e526f124fe4aaebd39f516751656844bc`.
+  No feature commit was dropped or superseded upstream.
+- The only textual conflict was in `src/renderer/generic.zig` around
+  `rebuildCells`: upstream removed an obsolete commented timing probe at the
+  same insertion point. The resolution keeps upstream's cleanup and the
+  renderer-local extra-row buffer bookkeeping.
+- Current Ghostty's `RenderState.Row` has a page-node generation `serial`.
+  Extra pixel-scroll rows now initialize and publish the matching node serial
+  beside each pin, preserving stale-node validation.
+- Zig 0.16's `std.Io.Mutex` requires an I/O context. The cell-size reset path
+  now uses `lockUncancelable(global.io())` and `unlock(global.io())`, matching
+  current Ghostty, and the extra-row tests pass `testing.io` to
+  `Terminal.init`.
+- `zig build -Demit-macos-app=false` passed with Zig 0.16.0. Focused tests for
+  `pixel scroll`, `extra row`, and the Metal `Uniforms` layout passed. The full
+  aggregate test graph was attempted twice but was SIGKILLed with exit 137 on
+  this machine; it reported no pixel-scroll test failure before termination.
+- The ReleaseFast universal xcframework build passed with macOS arm64+x86_64,
+  iOS arm64, and iOS arm64-simulator slices.
 
 ## Design decision: Option B (renderer-local extra rows)
 

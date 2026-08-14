@@ -12,6 +12,21 @@ When we change the fork, update this document and the parent submodule SHA.
 
 ## Current fork changes
 
+### cmux Smooth pixel-scroll overlay
+
+The personal `smooth-scroll` branch overrides the product-main Ghostty pin with
+`3234ce204724340159355c3733bd99a6c417c991` from
+`Yan-Yu-Lin/ghostty` branch `pixel-scroll`. It is based on the exact Ghostty
+commit pinned by cmux `origin/main`, `f76c132e526f124fe4aaebd39f516751656844bc`,
+and carries the seven pixel-perfect scroll/selection commits plus one migration
+commit for current Ghostty and Zig 0.16 APIs.
+
+Conflict notes: `src/renderer/generic.zig` owns the GPU-only two-extra-row
+layout; `src/terminal/render.zig` extra rows must copy the current page-node
+`serial` together with each pin; and every renderer `std.Io.Mutex` call must
+carry the appropriate I/O context. Rebase this overlay onto the Ghostty SHA
+pinned by the target cmux revision, not Ghostty's absolute tip.
+
 The submodule pinned by this branch is `f76c132e5`, the fork-main merge of
 https://github.com/manaflow-ai/ghostty/pull/191. Its `533c27ae1` fix preserves
 saved cursors while formatter replay restores the active cursor after margins,
