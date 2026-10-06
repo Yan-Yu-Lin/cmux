@@ -1,7 +1,7 @@
 [submodule "ghostty"]
 	path = ghostty
 	url = https://github.com/Yan-Yu-Lin/ghostty.git
-	branch = pixel-scroll
+	branch = pixel-scroll-v0.65.0
 [submodule "homebrew-cmux"]
 	path = homebrew-cmux
 	url = https://github.com/manaflow-ai/homebrew-cmux.git
