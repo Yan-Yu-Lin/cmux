@@ -29,11 +29,25 @@
 ## 工具鏈(必讀)
 
 - **Zig 必須用 0.16.0**(cmux v0.65.0 的 ghostty pin 也是 `minimum_zig_version = 0.16.0`)。
-- **Xcode 用 26,不要用 27**:`xcode-select` 目前指向 `/Applications/Xcode-27.0.0.app`,它**沒有裝 Metal Toolchain**
-  (`cannot execute tool 'metal'`)。cmux v0.65.0 的 `.xcode-version` 是 `26`。所有 zig / xcodebuild 指令前加:
-  ```bash
-  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # Xcode 26.0,Metal Toolchain 已安裝
-  ```
+- **兩個 Xcode 分工(2026-10 實測)**:
+  - **Zig / GhosttyKit / Metal → Xcode 26.0**(`/Applications/Xcode.app`)。`xcode-select` 指向的
+    `/Applications/Xcode-27.0.0.app` **沒有裝 Metal Toolchain**(`cannot execute tool 'metal'`)。
+    ```bash
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # zig build / ensure-ghosttykit.sh 用這個
+    ```
+  - **cmux app 的 xcodebuild → Xcode 27**(Swift 6.4)。Xcode 26.0 的 Swift 6.2 編 v0.65.0 會**編譯器當掉**
+    (`SILFunction type mismatch for 'ghostty_surface_clear_selection'`,DESERIALIZATION FAILURE,arm64/x86_64 都會)。
+    這是上游 Swift 程式 + 舊編譯器的問題,跟 pixel-scroll 無關。上游 CI 用 Xcode 26.6,本機沒有。
+    ```bash
+    export DEVELOPER_DIR=/Applications/Xcode-27.0.0.app/Contents/Developer   # xcodebuild 用這個
+    ```
+- **只 build arm64**(`ARCHS=arm64 ONLY_ACTIVE_ARCH=YES`):Arthur 的 Mac 是 Apple Silicon,不需要 x86_64 slice。
+- **Rust(diff sidecar)**:cmux 用 `Native/DiffSidecar/rust-toolchain.toml` 釘 Rust 1.88.0,
+  但 Arthur 的 PATH(`~/.zshenv:27`、`~/.zshrc:40`、fish `config.fish:79`)把
+  `~/.rustup/toolchains/stable-aarch64-apple-darwin/bin` 放在 rustup proxy 前面,所以實際用的是 stable。
+  stable 的 `rust-objcopy` 需要 `llvm-tools` component 才有 `libLLVM.dylib`,沒裝會
+  `Library not loaded: @rpath/libLLVM.dylib` → sidecar 沒 strip → `verify-diff-sidecar-artifact.sh` 失敗。
+  修法(已做):`rustup component add llvm-tools --toolchain stable`。stable 每次升級後若又壞,再跑一次。
 - `~/.zshenv` 已把 `ZIG_GLOBAL_CACHE_DIR` 放到外接 SSD。`ghostty/.zig-cache` 留在 repo 內是預期行為。
 - **建置前確認外接 SSD 有掛上**(`/Volumes/111360128 Lin Yan Yu/DevCache`)。
 
@@ -44,7 +58,8 @@
 cd ghostty
 zig build -Demit-macos-app=false                          # 快速編譯檢查
 zig build test -Demit-macos-app=false -Dtest-filter='pixel scroll'   # 針對性測試(也跑 'extra row'、'Uniforms layout'、'overscan')
-zig build test -Demit-macos-app=false -Dtest-filter=''    # 全部 Zig 測試(不帶 filter 會多跑 macOS xcodebuild test,會失敗,不相關)
+zig build test -Demit-macos-app=false -Dtest-filter=' ' -j2   # 全部 Zig 測試。filter 用一個空白(符合所有測試名);
+                                                              # 不帶 filter 會多跑 macOS xcodebuild test,會失敗,不相關
 cd ..
 CMUX_GHOSTTYKIT_NO_PREBUILT=1 ./scripts/ensure-ghosttykit.sh   # 用上游腳本建 ReleaseFast universal xcframework(正確的 flags/flavor)
 ```
@@ -58,18 +73,26 @@ CMUX_GHOSTTYKIT_NO_PREBUILT=1 ./scripts/ensure-ghosttykit.sh   # 用上游腳本
 ### 2. Build app — Release(最終版)
 上游 Release 要求 Manaflow 的開發者憑證,本機沒有 → 跳過簽章、事後 ad-hoc 簽。DerivedData 放外接 SSD:
 ```bash
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export DEVELOPER_DIR=/Applications/Xcode-27.0.0.app/Contents/Developer
 xcodebuild -project cmux.xcodeproj -scheme cmux -configuration Release \
-  -destination 'platform=macOS' \
-  -derivedDataPath "/Volumes/111360128 Lin Yan Yu/DevCache/xcode-derived/cmux-smoothnext" \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath "/Volumes/111360128 Lin Yan Yu/DevCache/xcode-derived/cmux-smoothnext-x27" \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
   INFOPLIST_KEY_CFBundleDisplayName="cmux Smooth Next" \
   PRODUCT_BUNDLE_IDENTIFIER="com.cmuxterm.app.smoothnext" build
 ```
-產物:`.../cmux-smoothnext/Build/Products/Release/cmux.app`。注意 Info.plist 的 `CFBundleDisplayName` 是 `$(PRODUCT_NAME)`,
-所以 build 完要用 PlistBuddy 把 `CFBundleDisplayName` 改成 `cmux Smooth Next`(簽章之前做)。
+約 15–20 分鐘。產物:`.../cmux-smoothnext-x27/Build/Products/Release/cmux.app`。Info.plist 的 `CFBundleDisplayName`
+是 `$(PRODUCT_NAME)`,所以 build 完要用 PlistBuddy 改成 `cmux Smooth Next`(簽章腳本會做)。
 
-### 3. Ad-hoc 簽章(有坑,照順序做)
+### 3. Ad-hoc 簽章 + 安裝 → `scripts/smooth/sign-and-install.sh`
+一個指令做完下面全部(改 display name、關 Sparkle、去受限權限、由內而外簽、裝到 /Applications、清 quarantine、驗章):
+```bash
+bash scripts/smooth/sign-and-install.sh
+```
+`spctl -a` 會說 `rejected` — ad-hoc 簽章本來就這樣(舊 Smooth 也是),拿掉 quarantine 後照樣能開。
+
+細節(有坑,照順序做):
 **坑:不能直接用 repo 的 `cmux.entitlements` 簽** — `keychain-access-groups` 與
 `com.apple.developer.web-browser.public-key-credential` 是受限權限,ad-hoc 簽章帶著它們 macOS 會拒開。
 
@@ -89,7 +112,11 @@ xcodebuild -project cmux.xcodeproj -scheme cmux -configuration Release \
 ```bash
 defaults export com.cmuxterm.app.smooth /tmp/p.plist
 defaults import com.cmuxterm.app.smoothnext /tmp/p.plist
+defaults write com.cmuxterm.app.smoothnext SUEnableAutomaticChecks -bool false   # 匯入會把舊版的 1 帶過來
 ```
+注意:Smooth Next 第一次啟動時,舊 Smooth 已佔用 `~/.local/state/cmux/cmux.sock`,所以 Smooth Next 自動改用
+`~/.local/state/cmux/cmux-501.sock`(上游的 fallback),互不干擾。socket 模式 `cmuxOnly`:只有在 Smooth Next
+裡面開的 terminal 才能對它下 `cmux` 指令。
 共用不需複製:`~/.config/ghostty/config`、`~/.config/cmux/*.json`。
 
 ### 5. Debug build(開發測試用)

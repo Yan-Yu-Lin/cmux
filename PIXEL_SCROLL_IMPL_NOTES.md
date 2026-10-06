@@ -112,11 +112,28 @@ were ever non-zero at once.
   `renderer.opengl.Frame.test.OpenGL acknowledges only after successful
   present and GPU completion`, which fails identically on pure upstream
   `324c0273` (checked in a temporary worktree) — pre-existing, unrelated.
+- Full Zig test binary run directly (`.zig-cache/o/<hash>/ghostty-test`):
+  2674 OK, 7 skipped, 0 failed through test 2759/3307. Test 2760
+  `termio.Exec.test.subprocess stop kills a distinct foreground process group`
+  then failed/hung (`expected -1, found 0`); the run was stopped there, so
+  tests 2761–3307 did **not** run in this aggregate pass. That test is in
+  `src/termio/Exec.zig`, which this fork does not touch; a pure-upstream
+  `324c0273` run of the same test also hung (stopped after 3+ min). All 17
+  fork tests and all 15 upstream overscan/inset tests ran and passed in this
+  run (see the pixel-scroll test list in the docs commit message). Note: aborted `zig build test`
+  runs leave orphaned `ghostty-test` processes behind; `pkill -f ghostty-test`.
 - `xcrun metal -c shaders.metal`: compiles.
-- Toolchain: the selected Xcode 27 (`/Applications/Xcode-27.0.0.app`) has no
-  Metal Toolchain installed; cmux v0.65.0 pins Xcode 26 (`.xcode-version`),
-  so all builds used `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`
-  (Xcode 26.0, Metal Toolchain installed).
+- ReleaseFast universal GhosttyKit via `scripts/ensure-ghosttykit.sh`
+  (`CMUX_GHOSTTYKIT_NO_PREBUILT=1`); the static library contains the
+  `pixel-scroll` / `pixel_scroll_offset_y` / extra-row strings.
+- Toolchain: Zig/Metal used Xcode 26.0 (`/Applications/Xcode.app`; the
+  selected Xcode 27 has no Metal Toolchain). The cmux app itself must be built
+  with Xcode 27: Xcode 26.0's Swift 6.2 crashes on v0.65.0 (see
+  BUILD_AND_MAINTAIN.md). App built arm64-only.
+- Installed as `/Applications/cmux Smooth Next.app` (0.65.0 build 108,
+  `com.cmuxterm.app.smoothnext`), launched alongside the old Smooth app;
+  its binary carries the pixel-scroll strings. Scroll feel and selection
+  alignment still need Arthur's eyes.
 
 ## 2026-08-15 upstream rebase
 
