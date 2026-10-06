@@ -402,5 +402,10 @@ extension UpdateController {
             || bundleIdentifier.hasPrefix("com.cmuxterm.app.debug.")
             || bundleIdentifier == "com.cmuxterm.app.staging"
             || bundleIdentifier.hasPrefix("com.cmuxterm.app.staging.")
+            // cmux Smooth fork builds (`com.cmuxterm.app.smooth`,
+            // `com.cmuxterm.app.smoothnext`, ...) are built locally with a
+            // patched Ghostty. The public appcast would replace them with
+            // stock cmux, so they must never check it.
+            || bundleIdentifier.hasPrefix("com.cmuxterm.app.smooth")
     }
 }
