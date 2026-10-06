@@ -1,8 +1,122 @@
 # Pixel scroll implementation notes
 
-Branch `pixel-scroll` in the `ghostty` submodule. The current head is
-`3234ce204`, based on cmux's pinned Ghostty commit `f76c132e5`. It contains the
-original 7 feature/fix commits plus one current-Ghostty API migration commit.
+Current branch: `pixel-scroll-v0.65.0` in the `ghostty` submodule, based on
+the Ghostty commit pinned by cmux `v0.65.0`, `324c0273`. It contains the
+original 7 feature/fix commits, the current-Ghostty API migration commit, and
+one Uniforms layout re-pin commit. The previous branch `pixel-scroll` (head
+`3234ce204` on `f76c132e5`) is kept unchanged so the 0.64.22 Smooth build stays
+reproducible.
+
+## 2026-10-06 port to cmux v0.65.0
+
+Rebased `f76c132e5..pixel-scroll` onto `324c0273` (109 upstream Ghostty
+commits). Upstream had meanwhile added, in the same files, its own
+**iOS-only** fractional scroll and render-inset machinery:
+
+- `39ade10b6` — `Uniforms.scroll_offset`, `RenderState.pixel_offset`, one
+  bottom overscan row (`RenderState.overscan_rows`), driven only by
+  `ghostty_surface_scroll_to_row_pixel_if_revision`.
+- `cd59106ad` / `e2258e898` — render top/bottom insets and their overscan
+  bands (`RenderState.top_overscan_rows`, `requested_*_overscan_rows`). Row
+  data index `i` is viewport row `i - top_overscan_rows`; cursor/selection
+  stay viewport-relative.
+- `5045df3f2` — offset-only changes mark the render state dirty.
+
+Verified that cmux v0.65.0 calls those C APIs only from
+`Packages/iOS/CmuxMobileTerminal` (`GhosttySurfaceView+LocalPixelScroll.swift`,
+`ghostty_surface_set_render_insets`). On macOS `scroll_offset`,
+`top_overscan_rows` and `overscan_rows` are therefore always zero, and our
+overlay remains the only thing that moves the macOS grid. Arthur chose to port
+the overlay as-is (not redesign on top of the iOS primitive); both mechanisms
+are kept and made to coexist.
+
+### Coexistence model
+
+Two independent shifts, which simply add:
+
+| | upstream (iOS) | cmux Smooth (macOS) |
+|---|---|---|
+| uniform | `scroll_offset` (+ `top_overscan_rows * cell_h`) | `pixel_scroll_offset_y` |
+| buffer rows | `top_overscan_rows + rows + overscan_rows` | `+ 2` extra rows (one above everything, one below) |
+| row_data index → buffer row | `i` | `i + 1` (`row_offset`) |
+| viewport row → buffer row | `vy + top_overscan_rows` | `vy + top_overscan_rows + row_offset` |
+
+`pixelScrollRows()` now returns false on iOS at comptime, so on iOS the
+overlay is fully off and upstream renders exactly as it intends; on macOS
+upstream's terms are zero. The combined formulas are still correct if both
+were ever non-zero at once.
+
+### Conflicts, per commit
+
+- **`7cb3da950` renderer: shift the grid** — `generic.zig` (8 hunks),
+  `shaders.metal` (3 hunks).
+  - `updateFrame`: kept upstream's `requested_top/bottom_overscan_rows`
+    requests *and* ours (`terminal_state.pixel_scroll`), now fed from
+    `pixelScrollRows()` so iOS never builds extra rows.
+  - `rebuildCells` sizing: `buffer_rows = state_rows (upstream: top band +
+    viewport + bottom overscan) + pixelScrollExtraRowCount()`; the row loop
+    walks all `state_rows` of row_data. Kept upstream's `top_overscan_px`
+    folding into `scroll_offset`.
+  - Row loop: `data_y` = row_data index, `y = data_y + row_offset` (buffer),
+    `vy = data_y - top_overscan_rows` (viewport; out of range for band rows).
+    All viewport-relative lookups inside `rebuildRow` (padding heuristic,
+    shaper cursor row, link hover) use `vy`; upstream's
+    `vp.y + top_overscan_rows != y` and `y - top_overscan_rows` link tests
+    became `vp.y != vy` and `vy < state.rows` + `vy`, which are equivalent
+    when our offset is zero.
+  - Preedit: upstream changed `PreeditRange.y` to a row_data index. Our
+    `range.y != vy` test became `range.y + pixelScrollRowOffset() != y`, and
+    the preedit cell position stays `range.y + row_offset`.
+  - Cursor: block-cursor uniform and `addCursor` grid position are
+    `cursor_vp.y + top_overscan_rows + row_offset` (the caller passes the sum).
+  - Images: upstream offsets placements by `images.top_overscan_rows` and
+    translates them by `scroll_offset`. Our extra row above is the same kind
+    of shift (images are also translated by `pixel_scroll_offset_y`, one cell
+    at rest), so `images.top_overscan_rows = top_overscan_rows + row_offset`.
+    **Behavior note:** the old fork did not add the extra row to image
+    placements, so Kitty images sat one row too high under pixel-scroll; this
+    port fixes that as a side effect. Not visually verified.
+  - Shaders: bg fragment samples at `y + scroll_offset + pixel_scroll_offset_y`.
+    Padding detection uses upstream's own test (sampled row outside the
+    buffer) when our shift is off, and our on-screen test (with
+    `scroll_offset` folded in) when it's on. Text vertex applies
+    `scroll_offset`, then ours + `round()` only while ours is active, so the
+    iOS fractional motion is not pixel-snapped. Image vertex subtracts both.
+- **`841963078` test extra row population** — `render.zig`, append-only
+  tests colliding with upstream's appended tests. Kept all of upstream's
+  tests byte-identical and appended our 5 tests verbatim (a naive
+  keep-both merge interleaved test bodies; verified by diffing every test
+  body against both parents).
+- **`79ee64d3b`, `4fce745f6`, `a43be7737`, `3234ce204`** — the pre-flight
+  dry run predicted conflicts in `Surface.zig`, `generic.zig`, `size.zig` and
+  `render.zig`, but after the resolution above they replayed cleanly.
+  Hit-testing (`posToViewport` → `pixelScrollHitTestShift`) needs no change:
+  upstream's insets don't touch the mouse coordinate space, and its
+  `scroll_offset` is zero on macOS.
+- **New `f8d5499d5` re-pin Uniforms layout** — upstream inserted
+  `scroll_offset` after `min_contrast`, shifting later fields by 4 bytes, so
+  the layout test failed (`expected 120, found 124`). Re-probed on-device by
+  compiling the MSL struct and reading field addresses through a compute
+  kernel: `scroll_offset` 120, `cursor_pos` 124, `cursor_color` 128,
+  `bg_color` 132, `pixel_scroll_offset_y` 136, `bools` 140, size 144.
+
+### Verification (port)
+
+- `zig build -Demit-macos-app=false`: clean.
+- Focused tests, all green: `pixel scroll` 88/88, `extra row` 78/78,
+  `pixelScrollShift` 75/75, `Uniforms layout` 74/74, `overscan` 85/85
+  (upstream's inset/overscan tests), `Size top_inset` 74/74,
+  `Size.screenForGrid` 76/76. (Each filter run also includes the always-on
+  tests, hence the totals.)
+- `render` filter: 247/248; the one failure is
+  `renderer.opengl.Frame.test.OpenGL acknowledges only after successful
+  present and GPU completion`, which fails identically on pure upstream
+  `324c0273` (checked in a temporary worktree) — pre-existing, unrelated.
+- `xcrun metal -c shaders.metal`: compiles.
+- Toolchain: the selected Xcode 27 (`/Applications/Xcode-27.0.0.app`) has no
+  Metal Toolchain installed; cmux v0.65.0 pins Xcode 26 (`.xcode-version`),
+  so all builds used `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`
+  (Xcode 26.0, Metal Toolchain installed).
 
 ## 2026-08-15 upstream rebase
 
